@@ -17,6 +17,7 @@ struct Flake {
 struct Debris {
     var x, y, vx, vy, size, alpha: Float
     var lands: Bool
+    var fade: Float = 1.6        // alpha lost per second (powder only)
 }
 
 struct Shard {            // broken-off icicle
@@ -359,11 +360,19 @@ final class Simulation {
             d.x += d.vx * fdt
             d.y += d.vy * fdt
             if d.lands, d.vy < 0, let (p, b) = hit(x: d.x, oldY: oy, newY: d.y) {
-                deposit(p, b, d.size * 0.35)
+                deposit(p, b, d.size * 0.5)
+                if d.vy < -220 && d.size > 4 && debris.count < 9000 {
+                    // Impact: the clump bursts into powder.
+                    for _ in 0..<Int(min(4, d.size / 3)) {
+                        debris.append(Debris(x: d.x, y: Float(p.rect.maxY) + p.bins[b], vx: d.vx * 0.3 + Float.random(in: -80...80),
+                                             vy: Float.random(in: 40...140), size: Float.random(in: 1.4...3), alpha: 0.8,
+                                             lands: false, fade: 1.4))
+                    }
+                }
                 debris.swapAt(i, debris.count - 1); debris.removeLast(); continue
             }
             if d.y < -20 || d.alpha <= 0 { debris.swapAt(i, debris.count - 1); debris.removeLast(); continue }
-            if !d.lands { d.alpha -= fdt * 1.6 }
+            if !d.lands { d.alpha -= fdt * d.fade }
             debris[i] = d
             i += 1
         }
@@ -547,29 +556,48 @@ final class Simulation {
         let n = p.bins.count
         let x0 = Float(p.rect.minX), top = Float(p.rect.maxY)
         // The slab keeps part of the window's motion (friction) – capped so it stays readable.
-        let carry = SIMD2(max(-420, min(420, vel.x * 0.45)), max(-200, min(260, vel.y * 0.3)))
-        var budget = 900
-        for i in 0..<n where p.bins[i] > 0.3 && p.visible[i] && budget > 0 {
+        let carry = SIMD2(max(-480, min(480, vel.x * 0.5)), max(-220, min(280, vel.y * 0.35)))
+        // How much snow is there? Everything that falls is proportional to it.
+        var volume: Float = 0
+        for i in 0..<n where p.visible[i] { volume += p.bins[i] * Self.binW }
+        let room = max(0, 9000 - debris.count)
+        var budget = min(room, 4000)
+        var i = 0
+        while i < n && budget > 0 {
             let h = p.bins[i]
-            let x = x0 + (Float(i) + 0.5) * Self.binW
-            let layers = max(1, min(4, Int(h / 6) + 1))
+            guard h > 0.3, p.visible[i] else { i += 1; continue }
+            // Deep drifts break into big clumps, a dusting into small ones.
+            let s = max(3, min(20, 3 + h * 0.34)) * Float.random(in: 0.85...1.15)
+            let step = max(1, Int(s * 0.45 / Self.binW))
+            let x = x0 + (Float(i) + Float(step) * 0.5) * Self.binW
+            // Stack clumps to fill the drift's height, so the slab keeps its shape as it leaves.
+            let layers = max(1, min(8, Int((h / (s * 0.7)).rounded(.up))))
             for k in 0..<layers {
-                let size = max(2.6, min(13, h / Float(layers) * 0.9 + 2.4)) * Float.random(in: 0.8...1.2)
-                debris.append(Debris(x: x + Float.random(in: -1.5...1.5), y: top + (Float(k) + 0.5) * h / Float(layers),
-                                     vx: carry.x * Float.random(in: 0.75...1) + Float.random(in: -14...14),
-                                     vy: carry.y + Float.random(in: -6...36), size: size, alpha: 1, lands: true))
+                let frac = (Float(k) + 0.5) / Float(layers)
+                let size = s * (1 - 0.25 * frac) * Float.random(in: 0.8...1.1)
+                // Bigger chunks hold together longer; small bits scatter more.
+                let spread = 26 / (1 + s * 0.08)
+                debris.append(Debris(x: x + Float.random(in: -2...2), y: top + frac * h,
+                                     vx: carry.x * Float.random(in: 0.8...1) + Float.random(in: -spread...spread),
+                                     vy: carry.y + Float.random(in: -8...30) + frac * 14, size: size, alpha: 1, lands: true))
                 budget -= 1
             }
-            if i % 3 == 0 {
-                // powder puff
-                debris.append(Debris(x: x, y: top + h, vx: carry.x * 0.5 + Float.random(in: -70...70),
-                                     vy: Float.random(in: 30...120), size: Float.random(in: 1.4...3), alpha: 0.85, lands: false))
-            }
+            i += step
+        }
+        // Powder cloud – bigger and longer-lived the more snow falls.
+        let puffs = min(Int(volume / 45), min(500, max(0, 9000 - debris.count)))
+        let fade = max(0.55, 1.5 - volume / 6000)
+        for _ in 0..<puffs {
+            let k = Int.random(in: 0..<n)
+            guard p.visible[k] else { continue }
+            let h = p.bins[k]
+            debris.append(Debris(x: x0 + (Float(k) + 0.5) * Self.binW, y: top + h * Float.random(in: 0.4...1.1),
+                                 vx: carry.x * 0.45 + Float.random(in: -95...95), vy: Float.random(in: 25...170),
+                                 size: Float.random(in: 1.5...4.5), alpha: 0.9, lands: false, fade: fade))
         }
         for (k, ic) in p.icicles.enumerated() where ic.len > 2 && (k < p.icicleVisible.count && p.icicleVisible[k]) {
             shards.append(Shard(x: x0 + ic.x, y: Float(p.rect.minY), vy: min(0, vel.y * 0.3), len: ic.len, width: ic.width))
         }
-        if debris.count > 5000 { debris.removeFirst(debris.count - 5000) }
         for i in 0..<n { p.bins[i] = 0 }
         p.icicles = []
         p.icicleVisible = []
