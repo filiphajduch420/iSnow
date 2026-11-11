@@ -46,6 +46,9 @@ final class Pile {
     var mesh: [Vertex] = []
     var dirty = true
     var iceDirty = true
+    var frost: Float = 0             // 0…1, frost creeping in from the window corners
+    var occluders: [CGRect] = []     // windows in front of this one (for frost corners)
+    var frostSeed: UInt64 = 0
 
     init(key: Int, kind: SurfaceKind, rect: CGRect, binW: Float, now: Double) {
         self.key = key
@@ -85,10 +88,14 @@ final class Simulation {
     private var snowballs: [Snowball] = []
     private var piles: [Int: Pile] = [:]
     private var landables: [Pile] = []
+    private var columns: [[Pile]] = []          // landables bucketed by 32-pt screen column
+    private static let columnW: Float = 32
     private var menuIcicles: [Icicle] = []
     private var menuIceDirty = true
     private var menuSnow: [Float] = []
-    var snowman = Snowman()
+    var snowmen: [Snowman] = []
+    private var windowRects: [(key: Int, rect: CGRect)] = []   // front to back
+    private var dockLocal: CGRect?
 
     private var time: Double = 0
     private var spawnAcc: Double = 0
@@ -105,7 +112,6 @@ final class Simulation {
         menuBarHeight = max(0, screenFrame.maxY - visibleFrame.maxY)
         dockBottomGuess = max(0, visibleFrame.minY - screenFrame.minY)
         self.hostsSnowman = hostsSnowman
-        snowman.nextBuild = 12
         let n = Int(Float(size.width) / Self.binW)
         menuSnow = Array(repeating: 0, count: n)
     }
@@ -159,23 +165,30 @@ final class Simulation {
 
         // Windows (front to back); a window is occluded by the windows in front of it.
         var front: [CGRect] = localOcc
+        var rects: [(key: Int, rect: CGRect)] = []
         for w in windows {
             let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
             guard r.intersects(bounds) else { continue }
             if cfg.onWindows {
                 let p = upsert(key: w.id, kind: .window, rect: r)
+                if p.frostSeed == 0 { p.frostSeed = UInt64(truncatingIfNeeded: w.id) &* 0x9E37_79B9_7F4A_7C15 | 1 }
                 if updateVisibility(p, occluders: front) { changed = true }
+                p.occluders = front
                 order.append(p)
             }
             front.append(r)
+            rects.append((w.id, r))
         }
-        // Dock
-        var dockLocal: CGRect?
-        if cfg.onDock, let d = dock?.offsetBy(dx: -origin.x, dy: -origin.y), d.intersects(bounds), d.maxY > 6 {
+        windowRects = rects
+        // Dock – its drift reaches above the Dock, so windows hide it (e.g. a zoomed window).
+        dockLocal = nil
+        if let d = dock?.offsetBy(dx: -origin.x, dy: -origin.y), d.intersects(bounds), d.maxY > 6 {
             dockLocal = d
-            let p = upsert(key: Self.dockKey, kind: .dock, rect: d)
-            if updateVisibility(p, occluders: localOcc) { changed = true }
-            order.append(p)
+            if cfg.onDock {
+                let p = upsert(key: Self.dockKey, kind: .dock, rect: d)
+                if updateVisibility(p, occluders: front) { changed = true }
+                order.append(p)
+            }
         }
         // Desktop icons – they sit below all windows.
         if cfg.onIcons {
@@ -190,7 +203,7 @@ final class Simulation {
         }
         // Bottom edge of the screen
         let g = upsert(key: Self.groundKey, kind: .ground, rect: CGRect(x: 0, y: -1, width: size.width, height: 1))
-        if updateGroundVisibility(g, dock: dockLocal) { changed = true }
+        if updateGroundVisibility(g, dock: dockLocal, windows: front) { changed = true }
         order.append(g)
 
         for (k, p) in piles where !seen.contains(k) {
@@ -199,10 +212,11 @@ final class Simulation {
             changed = true
         }
         landables = order
+        rebuildColumns()
         if capsChanged || tintChanged {
             for p in order { p.cap = capFor(p.kind); p.dirty = true; p.bins = p.bins.map { min($0, p.cap) } }
         }
-        if hostsSnowman { placeSnowman(dock: dockLocal) }
+        if hostsSnowman { syncSnowmen() }
         return changed
     }
 
@@ -255,12 +269,14 @@ final class Simulation {
         return changed
     }
 
-    private func updateGroundVisibility(_ p: Pile, dock: CGRect?) -> Bool {
+    /// The bottom drift lies behind windows: a window reaching the bottom edge hides it.
+    private func updateGroundVisibility(_ p: Pile, dock: CGRect?, windows: [CGRect]) -> Bool {
         var changed = false
         for i in 0..<p.bins.count {
             let x = (CGFloat(i) + 0.5) * CGFloat(Self.binW)
             var v = true
             if let d = dock, d.minY < 12, x >= d.minX - 4, x <= d.maxX + 4 { v = false }
+            if v { for w in windows where x >= w.minX && x <= w.maxX && w.minY <= 4 { v = false; break } }
             if p.visible[i] != v { p.visible[i] = v; changed = true }
         }
         if changed { p.dirty = true }
@@ -284,6 +300,8 @@ final class Simulation {
         }
         if cfg.mouse, let mouse { stepMouse(SIMD2(Float(mouse.x), Float(mouse.y)), dt: fdt) } else { lastMouse = nil }
         let acc = Float(cfg.accumulation)
+        let temp = Float(cfg.temperature)
+        let sleet = temp > 4          // too warm: wet flakes melt on contact
 
         // Flakes
         var i = 0
@@ -294,7 +312,7 @@ final class Simulation {
             f.x += (wind * (0.35 + f.depth) + sin(f.phase) * f.amp + f.vx) * fdt
             f.y -= f.vy * fdt
             if f.vx != 0 { f.vx *= max(0, 1 - 2.5 * fdt); if abs(f.vx) < 1 { f.vx = 0 } }
-            if f.depth > 0.3, let (p, b) = hit(x: f.x, oldY: oy, newY: f.y) {
+            if f.depth > 0.3, !sleet, let (p, b) = hit(x: f.x, oldY: oy, newY: f.y) {
                 deposit(p, b, 0.35 * acc * (0.6 + f.depth))
                 flakes.swapAt(i, flakes.count - 1); flakes.removeLast(); continue
             }
@@ -358,8 +376,9 @@ final class Simulation {
         if growTick {
             let tick = Float(meshTimer)
             meshTimer = 0
-            if cfg.melt > 0 {
-                let m = Float(cfg.melt) / 60 * tick
+            let temp = Float(cfg.temperature)
+            if cfg.meltRate > 0 {
+                let m = cfg.meltRate / 60 * tick
                 for p in landables {
                     var any = false
                     for k in p.bins.indices where p.bins[k] > 0 { p.bins[k] = max(0, p.bins[k] - m); any = true }
@@ -367,9 +386,28 @@ final class Simulation {
                 }
                 for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - m * 0.2) }
             }
+            // Frost on windows: grows on still windows when it is below zero, thaws above.
+            let frostTarget: Float = cfg.windowFrost && temp < 0 ? min(1, -temp / 15) : 0
+            for p in landables where p.kind == .window {
+                var f = p.frost
+                if f > frostTarget { f = max(frostTarget, f - tick / 25) }
+                else if now - p.lastMove > 4 { f = min(frostTarget, f + tick / 70 * (0.5 + frostTarget)) }
+                if abs(f - p.frost) > 0.0005 { p.frost = f; p.dirty = true }
+            }
             for p in landables where p.kind == .window {
                 guard cfg.icicles else {
                     if !p.icicles.isEmpty { p.icicles = []; p.icicleVisible = []; p.iceDirty = true }
+                    continue
+                }
+                if temp > 0 {
+                    // Thaw: icicles shrink and eventually disappear.
+                    if !p.icicles.isEmpty {
+                        for k in p.icicles.indices { p.icicles[k].len -= temp * 0.12 * tick }
+                        p.icicles.removeAll { $0.len <= 0.3 }
+                        p.icicleVisible = Array(repeating: false, count: p.icicles.count)
+                        p.dirty = true
+                        p.iceDirty = true
+                    }
                     continue
                 }
                 guard now - p.lastMove > 12, p.rect.minY > 40 else { continue }
@@ -384,8 +422,9 @@ final class Simulation {
                     p.icicleVisible = Array(repeating: false, count: count)
                     p.dirty = true          // visibility is computed on the next sync
                 }
+                let coldBoost = 1 + min(2, -temp / 8)
                 for k in p.icicles.indices where p.icicles[k].len < p.icicles[k].maxLen {
-                    p.icicles[k].len = min(p.icicles[k].maxLen, p.icicles[k].len + p.icicles[k].rate * tick)
+                    p.icicles[k].len = min(p.icicles[k].maxLen, p.icicles[k].len + p.icicles[k].rate * coldBoost * tick)
                     p.iceDirty = true
                 }
             }
@@ -398,9 +437,14 @@ final class Simulation {
                                       rate: m / Float.random(in: 90...240), width: Float.random(in: 3...5))
                     }
                 }
-                for k in menuIcicles.indices where menuIcicles[k].len < menuIcicles[k].maxLen {
-                    menuIcicles[k].len = min(menuIcicles[k].maxLen, menuIcicles[k].len + menuIcicles[k].rate * tick)
+                if temp > 0 {
+                    for k in menuIcicles.indices { menuIcicles[k].len = max(0, menuIcicles[k].len - temp * 0.12 * tick) }
                     menuIceDirty = true
+                } else {
+                    for k in menuIcicles.indices where menuIcicles[k].len < menuIcicles[k].maxLen {
+                        menuIcicles[k].len = min(menuIcicles[k].maxLen, menuIcicles[k].len + menuIcicles[k].rate * tick)
+                        menuIceDirty = true
+                    }
                 }
             } else if !menuIcicles.isEmpty || menuSnow.contains(where: { $0 > 0 }) {
                 menuIcicles = []
@@ -409,20 +453,33 @@ final class Simulation {
             }
         }
 
-        if hostsSnowman { stepSnowman(dt: fdt) }
+        if hostsSnowman { stepSnowmen(dt: fdt) }
     }
 
     /// Does anything still need animating? If not, the display link goes to sleep.
     var isAnimating: Bool {
         if !cfg.paused && !fullscreen { return true }
         if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty { return true }
-        return hostsSnowman && snowman.isMoving
+        return hostsSnowman && snowmen.contains { $0.isMoving }
     }
 
     // MARK: - Drift physics
 
-    private func hit(x: Float, oldY: Float, newY: Float) -> (Pile, Int)? {
+    private func rebuildColumns() {
+        let n = Int(W / Self.columnW) + 1
+        var cols = Array(repeating: [Pile](), count: n)
         for p in landables {
+            let a = max(0, Int(Float(p.rect.minX) / Self.columnW))
+            let b = min(n - 1, Int(Float(p.rect.maxX) / Self.columnW))
+            if a <= b { for c in a...b { cols[c].append(p) } }
+        }
+        columns = cols
+    }
+
+    private func hit(x: Float, oldY: Float, newY: Float) -> (Pile, Int)? {
+        let c = Int(x / Self.columnW)
+        guard c >= 0, c < columns.count else { return nil }
+        for p in columns[c] {
             let rel = x - Float(p.rect.minX)
             if rel < 0 || rel >= Float(p.rect.width) { continue }
             let b = Int(rel / Self.binW)
@@ -479,6 +536,7 @@ final class Simulation {
         for i in 0..<n { p.bins[i] = 0 }
         p.icicles = []
         p.icicleVisible = []
+        p.frost = 0
         p.dirty = true
         p.iceDirty = true
     }
@@ -507,11 +565,16 @@ final class Simulation {
 
     private func spawnFlake() {
         let depth = Float.random(in: 0.25...1)
-        let size = (1.4 + depth * depth * 5.2) * Float(cfg.flakeSize)
-        let vy = (22 + 58 * depth + Float.random(in: 0...12)) * Float(cfg.fallSpeed)
+        let temp = Float(cfg.temperature)
+        // Above zero the snow gets wet (heavier, faster); above +4 °C it turns to sleet.
+        let wet: Float = temp > 0 ? min(1, temp / 4) : 0
+        let sleet = temp > 4
+        let size = (1.4 + depth * depth * 5.2) * Float(cfg.flakeSize) * (sleet ? 0.55 : 1 + wet * 0.2)
+        let vy = (22 + 58 * depth + Float.random(in: 0...12)) * Float(cfg.fallSpeed) * (sleet ? 2.6 : 1 + wet * 0.5)
         flakes.append(Flake(x: Float.random(in: -20...(W + 20)), y: H + size, vx: 0, vy: vy,
                             phase: Float.random(in: 0...(2 * .pi)), freq: Float.random(in: 0.5...1.6),
-                            amp: Float.random(in: 5...22) * depth, depth: depth, size: size, alpha: 0.5 + 0.5 * depth,
+                            amp: Float.random(in: 5...22) * depth * (sleet ? 0.2 : 1), depth: depth, size: size,
+                            alpha: (0.5 + 0.5 * depth) * (sleet ? 0.6 : 1),
                             sparkle: cfg.sparkle && Float.random(in: 0...1) < 0.18))
     }
 
@@ -551,56 +614,184 @@ final class Simulation {
         }
     }
 
-    // MARK: - Snowman
+    // MARK: - Snowmen
 
-    private func placeSnowman(dock: CGRect?) {
-        if let d = dock, d.minY < size.height / 2 {
-            snowman.baseY = Float(d.maxY)
-            snowman.anchorX = Float(d.maxX) - 46 * snowman.sizeScale
-        } else {
-            snowman.baseY = Float(dockBottomGuess)
-            snowman.anchorX = W * 0.5 + 180
+    /// Default spot for snowman i: along the top of the Dock from the right, then beside the Dock.
+    private func slot(_ i: Int, size sz: Float) -> (key: Int, x: Float, y: Float) {
+        let gap = 64 * sz
+        if let d = dockLocal, d.minY < size.height / 2 {
+            let x = Float(d.maxX) - 46 * sz - Float(i) * gap
+            if x > Float(d.minX) + 20 * sz { return (Self.dockKey, x, Float(d.maxY)) }
+            let k = Float(i) - floor((Float(d.width) - 66 * sz) / gap) - 1
+            let gx = Float(d.minX) - 30 * sz - max(0, k) * gap
+            return (Self.groundKey, max(20 * sz, gx), 0)
+        }
+        return (Self.groundKey, W * 0.5 + 180 - Float(i) * gap, Float(dockBottomGuess))
+    }
+
+    private func surfaceRect(_ key: Int) -> CGRect? {
+        if key == Self.groundKey { return CGRect(x: 0, y: -1, width: size.width, height: 1) }
+        if key == Self.dockKey { return dockLocal }
+        if let p = piles[key] { return p.rect }
+        return windowRects.first { $0.key == key }?.rect
+    }
+
+    /// Highest visible surface at x whose top is at or below y.
+    private func surfaceBelow(x: Float, y: Float) -> (key: Int, top: Float) {
+        var best: (Int, Float) = (Self.groundKey, 0)
+        for (idx, w) in windowRects.enumerated() {
+            let r = w.rect
+            guard x >= Float(r.minX) + 8, x <= Float(r.maxX) - 8, Float(r.maxY) <= y + 1, Float(r.maxY) > best.1,
+                  r.maxY < size.height - menuBarHeight - 1 else { continue }
+            let pt = CGPoint(x: CGFloat(x), y: r.maxY + 3)
+            if windowRects[..<idx].contains(where: { $0.rect.contains(pt) }) { continue }
+            best = (w.key, Float(r.maxY))
+        }
+        if let d = dockLocal, x >= Float(d.minX), x <= Float(d.maxX), Float(d.maxY) <= y + 1, Float(d.maxY) > best.1 {
+            best = (Self.dockKey, Float(d.maxY))
+        }
+        return best
+    }
+
+    private func syncSnowmen() {
+        let want = cfg.snowman ? max(1, min(6, Int(cfg.snowmanCount.rounded()))) : 0
+        while snowmen.count < want {
+            var s = Snowman()
+            s.nextBuild = snowmen.isEmpty ? 12 : Float(4 + snowmen.count * 5)
+            snowmen.append(s)
+        }
+        while snowmen.count > want {
+            var s = snowmen.removeLast()
+            s.dismantle(into: &debris)
+        }
+        let sz = Float(cfg.snowmanSize)
+        for i in snowmen.indices {
+            var s = snowmen[i]
+            s.sizeScale = sz
+            if s.carried || s.falling { snowmen[i] = s; continue }
+            if !s.userPlaced {
+                let sl = slot(i, size: sz)
+                s.hostKey = sl.key
+                s.anchorX = sl.x
+                s.baseY = sl.y
+                s.hostRect = surfaceRect(sl.key)
+            } else if let r = surfaceRect(s.hostKey), let old = s.hostRect,
+                      abs(r.minX - old.minX) < 0.5, abs(r.maxY - old.maxY) < 0.5 {
+                s.anchorX = Float(r.minX) + s.offsetX
+                s.baseY = Float(r.maxY)
+            } else if s.phase != .absent {
+                // The window it stood on moved or closed – it falls.
+                s.falling = true
+                s.vy = 0
+            } else {
+                s.userPlaced = false
+            }
+            // Fade it when it covers a window (behind the Dock or in front of its own window).
+            s.ghost = false
+            if cfg.snowmanGhost, let body = s.bodyRect {
+                for w in windowRects {
+                    if w.key == s.hostKey { break }
+                    if w.rect.intersects(body.insetBy(dx: 4, dy: 2)) { s.ghost = true; break }
+                }
+            }
+            snowmen[i] = s
         }
     }
 
-    private func stepSnowman(dt: Float) {
+    private func stepSnowmen(dt: Float) {
         guard cfg.snowman else {
-            if snowman.phase != .absent { snowman.dismantle(into: &debris) }
+            for i in snowmen.indices where snowmen[i].phase != .absent { snowmen[i].dismantle(into: &debris) }
             return
         }
         if cfg.paused || fullscreen { return }
-        snowman.sizeScale = Float(cfg.snowmanSize)
-        snowman.rebuildDelay = Float(cfg.snowmanBreak) * 60
-        snowman.throwEvery = Float(cfg.throwEvery)
-        let wantsThrow = snowman.step(dt: dt, debris: &debris, shards: &shards)
-        if wantsThrow && cfg.snowballs { throwSnowball() }
+        for i in snowmen.indices {
+            snowmen[i].rebuildDelay = Float(cfg.snowmanBreak) * 60
+            snowmen[i].throwEvery = Float(cfg.throwEvery)
+            snowmen[i].temperature = Float(cfg.temperature)
+            if snowmen[i].falling { stepFall(i, dt: dt) }
+            let wantsThrow = snowmen[i].step(dt: dt, debris: &debris, shards: &shards)
+            if wantsThrow && cfg.snowballs && !snowmen[i].ghost { throwSnowball(from: i) }
+        }
     }
 
-    func throwSnowball() {
+    private func stepFall(_ i: Int, dt: Float) {
+        var s = snowmen[i]
+        let target = surfaceBelow(x: s.anchorX, y: s.baseY)
+        s.vy -= Self.gravity * dt
+        s.baseY += s.vy * dt
+        if s.baseY <= target.top {
+            s.baseY = target.top
+            s.falling = false
+            s.wobble = 1
+            s.hostKey = target.key
+            s.hostRect = surfaceRect(target.key)
+            s.offsetX = s.anchorX - Float(s.hostRect?.minX ?? 0)
+            s.userPlaced = true
+            for _ in 0..<8 {
+                let a = Float.random(in: 0.2...(.pi - 0.2)), v = Float.random(in: 40...120)
+                debris.append(Debris(x: s.anchorX, y: s.baseY + 2, vx: cos(a) * v, vy: sin(a) * v,
+                                     size: .random(in: 2...4), alpha: 1, lands: false))
+            }
+        }
+        snowmen[i] = s
+    }
+
+    func throwSnowball(from i: Int = 0) {
+        guard snowmen.indices.contains(i) else { return }
         let targets = landables.filter { ($0.kind == .window || $0.kind == .icon) && $0.visible.contains(true) }
         guard let p = targets.randomElement() else { return }
         let idx = p.visible.indices.filter { p.visible[$0] }
         guard let b = idx.randomElement() else { return }
         let tx = Float(p.rect.minX) + (Float(b) + 0.5) * Self.binW
         let ty = Float(p.rect.maxY) + p.bins[b] + 2
-        let hand = snowman.handPosition
+        let hand = snowmen[i].handPosition
         let dist = hypot(tx - hand.x, ty - hand.y)
         let T = max(0.6, min(1.7, dist / 420))
         let vx = (tx - hand.x) / T
         let vy = (ty - hand.y) / T + 0.5 * 600 * T
         snowballs.append(Snowball(x: hand.x, y: hand.y, vx: vx, vy: vy, t: 0, duration: T, target: p.key, tx: tx))
-        snowman.armThrow = 1
+        snowmen[i].armThrow = 1
     }
 
-    func snowmanClicked(at p: CGPoint) {
+    func snowmanClicked(_ i: Int, at p: CGPoint) {
+        guard hostsSnowman, snowmen.indices.contains(i) else { return }
+        let fightBack = snowmen[i].hit(at: SIMD2(Float(p.x), Float(p.y)), debris: &debris)
+        if fightBack && cfg.snowballs { throwSnowball(from: i) }
+    }
+
+    /// Drag a snowman with the mouse (`p` = cursor in local coordinates).
+    func dragSnowman(_ i: Int, to p: CGPoint) {
+        guard snowmen.indices.contains(i), snowmen[i].bodyRect != nil else { return }
+        snowmen[i].carried = true
+        snowmen[i].falling = false
+        snowmen[i].anchorX = Float(p.x)
+        snowmen[i].baseY = Float(p.y) - snowmen[i].R(0) * 1.4
+        snowmen[i].wobble = max(snowmen[i].wobble, 0.4)
+    }
+
+    /// Let go: it falls onto whatever is below.
+    func dropSnowman(_ i: Int) {
+        guard snowmen.indices.contains(i), snowmen[i].carried else { return }
+        snowmen[i].carried = false
+        snowmen[i].falling = true
+        snowmen[i].vy = 0
+    }
+
+    var snowmanHitRects: [CGRect?] {
+        guard hostsSnowman, !fullscreen else { return [] }
+        return snowmen.map { $0.hitRect }
+    }
+
+    func buildSnowmanNow() {
         guard hostsSnowman else { return }
-        let fightBack = snowman.hit(at: SIMD2(Float(p.x), Float(p.y)), debris: &debris)
-        if fightBack && cfg.snowballs { throwSnowball() }
+        for i in snowmen.indices { snowmen[i].buildNow() }
     }
 
-    var snowmanHitRect: CGRect? { hostsSnowman && !fullscreen ? snowman.hitRect : nil }
-
-    func buildSnowmanNow() { if hostsSnowman { snowman.buildNow() } }
+    /// Send all dragged snowmen back to the Dock.
+    func resetSnowmen() {
+        for i in snowmen.indices { snowmen[i].userPlaced = false; snowmen[i].falling = false }
+        syncSnowmen()
+    }
 
     // MARK: - Output for the renderer
 
@@ -628,7 +819,7 @@ final class Simulation {
         }
         if cfg.onMenuBar { buildMenuBar(into: &out) }
         for s in shards { Mesh.icicle(&out, x: s.x, top: s.y, len: s.len, width: s.width, alpha: 0.9) }
-        if hostsSnowman { snowman.build(into: &out) }
+        if hostsSnowman { for s in snowmen { s.build(into: &out) } }
     }
 
     private func rebuildMesh(_ p: Pile) {
@@ -650,6 +841,7 @@ final class Simulation {
             Mesh.snowColumn(&p.mesh, l: l, m: m, r: r, base: base, hl: hl, hm: hm, hr: hr)
             i += 1
         }
+        if p.kind == .window && p.frost > 0.01 { buildWindowFrost(p) }
         if p.kind == .window {
             for (k, ic) in p.icicles.enumerated() where ic.len > 0.6 && k < p.icicleVisible.count && p.icicleVisible[k] {
                 Mesh.icicle(&p.mesh, x: x0 + ic.x, top: Float(p.rect.minY) + 0.5, len: ic.len, width: ic.width, alpha: 0.85)
@@ -657,6 +849,44 @@ final class Simulation {
         }
         p.dirty = false
         p.iceDirty = false
+    }
+
+    /// Frost creeping into a window from its corners, with a few ice needles.
+    private func buildWindowFrost(_ p: Pile) {
+        let r = p.rect
+        let f = p.frost
+        let radius = Float(min(r.width, r.height)) * 0.08 + 70 * f
+        let a = 0.5 * f
+        let ice: RGBA = (0.74 * tint.0, 0.86 * tint.1, 1 * tint.2, a)
+        let clear: RGBA = (ice.0, ice.1, ice.2, 0)
+        var rng = p.frostSeed
+        func rnd() -> Float {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Float(rng >> 40) / Float(1 << 24)
+        }
+        let corners: [(CGFloat, CGFloat, Float)] = [(r.minX, r.minY, 0), (r.maxX, r.minY, .pi / 2),
+                                                    (r.maxX, r.maxY, .pi), (r.minX, r.maxY, 1.5 * .pi)]
+        for (cx, cy, start) in corners {
+            let ix = cx == r.minX ? cx + 3 : cx - 3, iy = cy == r.minY ? cy + 3 : cy - 3
+            guard ix >= 0, ix <= size.width, iy >= 0, iy <= size.height,
+                  !p.occluders.contains(where: { $0.contains(CGPoint(x: ix, y: iy)) }) else { continue }
+            // Corner glow
+            Mesh.sector(&p.mesh, cx: Float(cx), cy: Float(cy), r: radius, from: start, to: start + .pi / 2,
+                        center: ice, rim: clear)
+            // Ice needles
+            let needles = 3 + Int(f * 6)
+            for _ in 0..<needles {
+                let ang = start + 0.15 + rnd() * (.pi / 2 - 0.3)
+                let len = radius * (0.5 + 0.7 * rnd())
+                let x0 = Float(cx), y0 = Float(cy)
+                let x1 = x0 + cos(ang) * len, y1 = y0 + sin(ang) * len
+                Mesh.line(&p.mesh, (x0, y0), (x1, y1), width: 1.1, color: (0.80, 0.90, 1, 0.75 * f))
+                let mx = x0 + (x1 - x0) * 0.6, my = y0 + (y1 - y0) * 0.6
+                let side = ang + (rnd() > 0.5 ? 0.6 : -0.6)
+                Mesh.line(&p.mesh, (mx, my), (mx + cos(side) * len * 0.3, my + sin(side) * len * 0.3),
+                          width: 0.9, color: (0.80, 0.90, 1, 0.6 * f))
+            }
+        }
     }
 
     private func buildFrost(into out: inout [Vertex]) {

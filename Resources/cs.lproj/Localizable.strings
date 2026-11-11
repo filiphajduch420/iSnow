@@ -45,16 +45,10 @@
 "Height on windows" = "Výška na oknech";
 "Height at the bottom edge" = "Výška u spodního okraje";
 "Pile-up speed" = "Rychlost přibývání";
-"Melting" = "Tání";
-"off" = "netaje";
-"%lld pt/min" = "%lld b/min";
 "%lld pt" = "%lld b";
-"Icicles" = "Rampouchy";
 "Icicles under windows and the menu bar" = "Rampouchy pod okny a lištou menu";
-"Length" = "Délka";
 
 /* Snowman */
-"Build a snowman on the Dock" = "Stavět sněhuláka na Docku";
 "Break between snowmen" = "Pauza mezi sněhuláky";
 "%lld s" = "%lld s";
 "%lld min" = "%lld min";
@@ -76,3 +70,22 @@
 "General" = "Obecné";
 "Launch at login" = "Spouštět po přihlášení";
 "Restore Defaults" = "Obnovit výchozí nastavení";
+
+/* Temperature */
+"Temperature" = "Teplota";
+"Sleet: nothing settles, drifts, icicles and snowmen melt quickly." = "Déšť se sněhem: nic se neusazuje, závěje, rampouchy i sněhuláci rychle tají.";
+"Thaw: wet snow, drifts and icicles slowly melt and snowmen shrink." = "Obleva: mokrý sníh, závěje a rampouchy pomalu tají a sněhuláci se zmenšují.";
+"Freezing: nothing melts, icicles grow and windows start to frost over." = "Mrzne: nic netaje, rostou rampouchy a okna začínají namrzat.";
+"Hard frost: icicles grow fast and windows freeze over from the corners." = "Tuhý mráz: rampouchy rychle rostou a okna zamrzají od rohů.";
+"Ice" = "Led";
+"Windows frost over when it is below zero" = "Okna pod nulou namrzají";
+"Icicle length" = "Délka rampouchů";
+"Melting and frost follow the temperature on the Snowfall tab." = "Tání a námraza se řídí teplotou na záložce Sněžení.";
+
+/* Snowmen */
+"Build snowmen on the Dock" = "Stavět sněhuláky na Docku";
+"Number of snowmen" = "Počet sněhuláků";
+"Fade a snowman that covers a window" = "Zprůhlednit sněhuláka, který překáží oknu";
+"Back to the Dock" = "Zpět na Dock";
+"Drag a snowman with the mouse to put it on a window or anywhere else. If the window moves, it falls." = "Sněhuláka můžeš myší přetáhnout na okno nebo kamkoli jinam. Když se okno pohne, spadne.";
+"Thousands of flakes cost more CPU – 30 fps on the Other tab helps." = "Tisíce vloček víc zatěžují procesor – pomůže 30 fps na záložce Ostatní.";

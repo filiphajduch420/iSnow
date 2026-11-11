@@ -19,7 +19,7 @@ final class Tracker {
 
     static var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
 
-    /// Cheap window query (CGWindowList, no permission needed), called ~8× per second.
+    /// Cheap window query (CGWindowList, no permission needed), called ~5× per second.
     func refreshWindows() {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                     kCGNullWindowID) as? [[String: Any]] else { return }
@@ -50,7 +50,7 @@ final class Tracker {
     /// Dock and desktop icons via Accessibility – off the main thread, once per second.
     func refreshAX(wantDock: Bool, wantIcons: Bool, done: @escaping @MainActor () -> Void) {
         Settings.shared.axTrusted = AXIsProcessTrusted()
-        guard Settings.shared.axTrusted, wantDock || wantIcons, !axBusy else {
+        guard Settings.shared.axTrusted, !axBusy else {
             if !Settings.shared.axTrusted { dockFrame = nil; icons = [] }
             return
         }
@@ -58,10 +58,10 @@ final class Tracker {
         let h = Self.primaryHeight
         Task.detached(priority: .utility) {
             let dock = wantDock ? AXProbe.dockFrame(primaryHeight: h) : nil
-            let icons = wantIcons ? AXProbe.desktopIcons(primaryHeight: h) : []
+            let icons = wantIcons ? AXProbe.desktopIcons(primaryHeight: h) : nil
             await MainActor.run {
                 self.dockFrame = dock
-                self.icons = icons
+                if let icons { self.icons = icons }
                 self.axBusy = false
                 done()
             }

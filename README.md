@@ -16,10 +16,17 @@ goes straight through the snow.
   below. Close it and all of it falls.
 - **Icicles** grow under windows that stay still for a while (and under the menu bar). Move the
   window and they snap off.
-- **Snowman** on the Dock: rolls in three balls, stacks them, puts on a scarf and a carrot nose,
-  waves, and throws snowballs at your windows and icons. After a few minutes it falls apart and
-  melts, and later a new one appears. Click it to knock it apart – every third hit drops a level,
-  and sometimes it fights back.
+- **Snowmen** on the Dock (one to six): each rolls in three balls, stacks them, puts on a scarf
+  and a carrot nose, waves, and throws snowballs at your windows and icons. After a few minutes it
+  falls apart and melts, and later a new one appears. Click a snowman to knock it apart – every
+  third hit drops a level, and sometimes it fights back.
+- **Drag a snowman** anywhere – onto a window, next to the Dock, wherever. It drops onto whatever is
+  below, and if that window moves, it falls again.
+- **Temperature** from −25 °C to +10 °C. Above zero the snow gets wet and drifts, icicles and
+  snowmen melt; above +4 °C it turns to sleet. Below zero nothing melts, icicles grow faster and
+  windows frost over from the corners – the colder, the more.
+- **Stays out of your way:** snow at the bottom and on the Dock hides behind windows, so a zoomed
+  window is never covered, and a snowman that covers a window fades out and lets clicks through.
 - **Extras:** the cursor scatters flakes and a quick swipe brushes snow off a window, sparkling
   flakes, custom snow color, melting, frosted screen edges, and no snow over full-screen apps.
 
@@ -29,9 +36,9 @@ Open **Settings…** (⌘,) from the snowflake in the menu bar:
 
 | Tab | What you can change |
 |---|---|
-| Snowfall | Preset, density, max number of flakes, flake size, fall speed, wind, sparkle, snow color |
-| Drifts | Where snow settles, max drift height on windows and at the bottom, pile-up speed, melting, icicles and their length, *Shake Off All Snow* |
-| Snowman | On/off, size, break between snowmen, *Build Now*, snowball fight and how often it throws |
+| Snowfall | Preset, temperature, density, max number of flakes, flake size, fall speed, wind, sparkle, snow color |
+| Drifts | Where snow settles, max drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
+| Snowman | On/off, number of snowmen, size, break between snowmen, fade when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often it throws |
 | Other | Cursor interaction, frosted edges, full-screen pause, 30 / 60 / 120 fps, launch at login, restore defaults |
 
 The app is in English and Czech and follows your system language.
@@ -73,7 +80,7 @@ Vločka is built to stay out of the way:
   snowman); shaders are compiled from source, so there are no textures or other assets;
 - `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode;
 - rendering stops completely when nothing is moving, and while the screen is asleep or locked;
-- window positions are polled about 8× per second, Accessibility queries run off the main thread
+- window positions are polled 5× per second, Accessibility queries run off the main thread
   once per second.
 
 On an M-series Mac a normal snowfall uses about 1 % CPU and about 20 MB of memory. The app bundle is
@@ -107,7 +114,8 @@ swift build -c release
 ```
 
 This simulates a scene with fake windows, a Dock and icons and saves it as an image – handy for
-checking rendering without screen recording permission.
+checking rendering without screen recording permission. `VLOCKA_TEMP=3` sets the temperature,
+`VLOCKA_SNOWMEN=2` the number of snowmen and `VLOCKA_MAX=1` uses a single zoomed window.
 
 ## Contributing
 

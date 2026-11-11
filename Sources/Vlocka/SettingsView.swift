@@ -67,6 +67,17 @@ private struct SnowTab: View {
                 ValueSlider(title: "Max flakes", value: $settings.config.maxFlakes, range: 50...6000, step: 50) {
                     "\(Int($0))"
                 }
+                if settings.config.maxFlakes > 2500 {
+                    Text("Thousands of flakes cost more CPU – 30 fps on the Other tab helps.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            Section("Temperature") {
+                ValueSlider(title: "Temperature", value: $settings.config.temperature, range: -25...10, step: 1) {
+                    String(format: "%+.0f °C", $0)
+                }
+                Text(temperatureHint)
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("Flakes") {
                 ValueSlider(title: "Size", value: $settings.config.flakeSize, range: 0.4...3, format: times)
@@ -83,6 +94,14 @@ private struct SnowTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var temperatureHint: String {
+        let t = settings.config.temperature
+        if t > 4 { return String(localized: "Sleet: nothing settles, drifts, icicles and snowmen melt quickly.") }
+        if t > 0 { return String(localized: "Thaw: wet snow, drifts and icicles slowly melt and snowmen shrink.") }
+        if t > -8 { return String(localized: "Freezing: nothing melts, icicles grow and windows start to frost over.") }
+        return String(localized: "Hard frost: icicles grow fast and windows freeze over from the corners.")
     }
 
     private var tintBinding: Binding<Color> {
@@ -122,18 +141,18 @@ private struct DriftTab: View {
                 ValueSlider(title: "Height on windows", value: $settings.config.windowDepth, range: 4...90, format: points)
                 ValueSlider(title: "Height at the bottom edge", value: $settings.config.groundDepth, range: 4...120, format: points)
                 ValueSlider(title: "Pile-up speed", value: $settings.config.accumulation, range: 0.3...8, format: times)
-                ValueSlider(title: "Melting", value: $settings.config.melt, range: 0...30) {
-                    $0 < 0.1 ? String(localized: "off") : String(localized: "\(Int($0.rounded())) pt/min")
-                }
                 HStack {
                     Spacer()
                     Button("Shake Off All Snow") { delegate.shakeAll() }
                 }
             }
-            Section("Icicles") {
+            Section("Ice") {
+                Toggle("Windows frost over when it is below zero", isOn: $settings.config.windowFrost)
                 Toggle("Icicles under windows and the menu bar", isOn: $settings.config.icicles)
-                ValueSlider(title: "Length", value: $settings.config.icicleLength, range: 0.3...3, format: times)
+                ValueSlider(title: "Icicle length", value: $settings.config.icicleLength, range: 0.3...3, format: times)
                     .disabled(!settings.config.icicles)
+                Text("Melting and frost follow the temperature on the Snowfall tab.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -147,15 +166,22 @@ private struct SnowmanTab: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Build a snowman on the Dock", isOn: $settings.config.snowman)
+                Toggle("Build snowmen on the Dock", isOn: $settings.config.snowman)
+                ValueSlider(title: "Number of snowmen", value: $settings.config.snowmanCount, range: 1...6, step: 1) {
+                    "\(Int($0))"
+                }
                 ValueSlider(title: "Size", value: $settings.config.snowmanSize, range: 0.5...3.5, format: times)
                 ValueSlider(title: "Break between snowmen", value: $settings.config.snowmanBreak, range: 0.2...20) {
                     $0 < 1 ? String(localized: "\(Int($0 * 60)) s") : String(localized: "\(Int($0.rounded())) min")
                 }
+                Toggle("Fade a snowman that covers a window", isOn: $settings.config.snowmanGhost)
                 HStack {
                     Spacer()
+                    Button("Back to the Dock") { delegate.resetSnowmen() }
                     Button("Build Now") { delegate.buildSnowmanNow() }
                 }
+                Text("Drag a snowman with the mouse to put it on a window or anywhere else. If the window moves, it falls.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             .disabled(!settings.config.snowman)
             Section("Snowball fight") {

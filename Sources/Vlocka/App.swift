@@ -30,6 +30,14 @@ struct MenuContent: View {
             set: { if let p = $0 { settings.config.apply(p) } })) {
             ForEach(Intensity.allCases) { Text($0.title).tag(Optional($0)) }
         }
+        Picker("Temperature", selection: Binding<Double>(
+            get: { settings.config.temperature.rounded() },
+            set: { settings.config.temperature = $0 })) {
+            ForEach([-20.0, -10, -4, 0, 2, 6], id: \.self) { Text(String(format: "%+.0f °C", $0)).tag($0) }
+            if ![-20.0, -10, -4, 0, 2, 6].contains(settings.config.temperature.rounded()) {
+                Text(String(format: "%+.0f °C", settings.config.temperature)).tag(settings.config.temperature.rounded())
+            }
+        }
         Divider()
         Toggle("Snow on Windows", isOn: $settings.config.onWindows)
         Toggle("Snowman", isOn: $settings.config.snowman)
@@ -53,10 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let tracker = Tracker()
     private var renderer: Renderer?
     private var overlays: [Overlay] = []
-    private let panel = SnowmanPanel()
+    private var panels: [SnowmanPanel] = []
     private var pollTimer: Timer?
     private var axTimer: Timer?
     private var observers: [NSObjectProtocol] = []
+    private var axTick = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
@@ -71,11 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderer = r
         settings.axTrusted = AXIsProcessTrusted()
         settings.onChange = { [weak self] in self?.settingsChanged() }
-        panel.onClick = { [weak self] p in self?.snowmanClicked(p) }
         tracker.refreshWindows()
         rebuildOverlays()
 
-        let poll = Timer(timeInterval: 0.12, repeats: true) { _ in MainActor.assumeIsolated { self.poll() } }
+        let poll = Timer(timeInterval: 0.2, repeats: true) { _ in MainActor.assumeIsolated { self.poll() } }
         RunLoop.main.add(poll, forMode: .common)
         pollTimer = poll
         let ax = Timer(timeInterval: 1.0, repeats: true) { _ in MainActor.assumeIsolated { self.refreshAX() } }
@@ -156,24 +164,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshAX() {
         let c = settings.config
-        tracker.refreshAX(wantDock: c.onDock || c.snowman, wantIcons: c.onIcons) { [weak self] in
+        axTick += 1
+        // The Dock is checked every second; desktop icons barely move, so every 4 seconds.
+        tracker.refreshAX(wantDock: true, wantIcons: c.onIcons && axTick % 4 == 1) { [weak self] in
             self?.poll()
         }
     }
 
+    private var snowmanOverlay: Overlay? { overlays.first { $0.sim.hostsSnowman } }
+
     private func updatePanel() {
-        guard let o = overlays.first(where: { $0.sim.hostsSnowman }), settings.config.snowman,
-              let r = o.sim.snowmanHitRect else {
-            panel.update(nil)
+        let rects = snowmanOverlay?.sim.snowmanHitRects ?? []
+        while panels.count < rects.count {
+            let i = panels.count
+            let p = SnowmanPanel()
+            p.onClick = { [weak self] pt in self?.withSnowman { o, l in o.sim.snowmanClicked(i, at: l(pt)) } }
+            p.onDrag = { [weak self] pt in self?.withSnowman { o, l in o.sim.dragSnowman(i, to: l(pt)) } }
+            p.onDrop = { [weak self] _ in self?.withSnowman { o, _ in o.sim.dropSnowman(i) } }
+            panels.append(p)
+        }
+        while panels.count > rects.count { panels.removeLast().close() }
+        guard let o = snowmanOverlay, settings.config.snowman else {
+            panels.forEach { $0.update(nil) }
             return
         }
-        panel.update(r.offsetBy(dx: o.sim.origin.x, dy: o.sim.origin.y))
+        for (i, r) in rects.enumerated() {
+            panels[i].update(r.map { $0.offsetBy(dx: o.sim.origin.x, dy: o.sim.origin.y) })
+        }
     }
 
-    private func snowmanClicked(_ p: CGPoint) {
-        guard let o = overlays.first(where: { $0.sim.hostsSnowman }) else { return }
-        o.sim.snowmanClicked(at: CGPoint(x: p.x - o.sim.origin.x, y: p.y - o.sim.origin.y))
+    /// Runs `body` with the overlay that hosts the snowmen and a global→local point converter.
+    private func withSnowman(_ body: (Overlay, (CGPoint) -> CGPoint) -> Void) {
+        guard let o = snowmanOverlay else { return }
+        let origin = o.sim.origin
+        body(o) { CGPoint(x: $0.x - origin.x, y: $0.y - origin.y) }
         o.wake()
+    }
+
+    func resetSnowmen() {
+        withSnowman { o, _ in o.sim.resetSnowmen() }
     }
 
     private func settingsChanged() {

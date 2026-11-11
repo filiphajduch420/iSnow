@@ -67,6 +67,18 @@ enum Mesh {
         }
     }
 
+    /// Circular sector (frost in window corners).
+    static func sector(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, from a0: Float, to a1: Float,
+                       center: RGBA, rim: RGBA, segments: Int = 10) {
+        var prev = (cx + cos(a0) * r, cy + sin(a0) * r)
+        for s in 1...segments {
+            let a = a0 + (a1 - a0) * Float(s) / Float(segments)
+            let p = (cx + cos(a) * r, cy + sin(a) * r)
+            v(&out, cx, cy, center); v(&out, prev.0, prev.1, rim); v(&out, p.0, p.1, rim)
+            prev = p
+        }
+    }
+
     static func disc(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, color: RGBA) {
         circle(&out, cx: cx, cy: cy, r: r, center: color, rim: color, segments: 12)
     }

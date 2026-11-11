@@ -37,12 +37,15 @@ struct SimConfig: Codable, Equatable, Sendable {
     var windowDepth: Double = 36       // max drift height on a window, in points
     var groundDepth: Double = 34
     var accumulation: Double = 3.5     // how fast snow piles up
-    var melt: Double = 0               // points per minute
+    var temperature: Double = -4       // °C: above zero snow melts, below zero windows frost over
+    var windowFrost = true
     var icicles = true
     var icicleLength: Double = 1.0
     // Snowman
     var snowman = true
     var snowmanSize: Double = 1.3
+    var snowmanCount: Double = 1
+    var snowmanGhost = true            // fade a snowman that covers a window
     var snowmanBreak: Double = 2.0     // minutes between snowmen
     var snowballs = true
     var throwEvery: Double = 30        // seconds
@@ -56,13 +59,17 @@ struct SimConfig: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case density, maxFlakes, flakeSize, fallSpeed, wind, sparkle, tint, onWindows, onDock, onIcons, onMenuBar,
-             windowDepth, groundDepth, accumulation, melt, icicles, icicleLength, snowman, snowmanSize,
+             windowDepth, groundDepth, accumulation, temperature, windowFrost, icicles, icicleLength, snowman,
+             snowmanSize, snowmanCount, snowmanGhost,
              snowmanBreak, snowballs, throwEvery, mouse, frost, pauseFullscreen, fps
     }
 
     var preset: Intensity? {
         Intensity.allCases.first { abs($0.density - density) < 0.01 && abs($0.maxFlakes - maxFlakes) < 1 }
     }
+
+    /// Melting speed in points per minute derived from the temperature.
+    var meltRate: Float { temperature > 0 ? Float(temperature) * 2.5 : 0 }
 
     mutating func apply(_ p: Intensity) {
         density = p.density

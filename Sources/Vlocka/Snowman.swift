@@ -31,6 +31,17 @@ struct Snowman {
     var sizeScale: Float = 1
     var rebuildDelay: Float = 120
     var throwEvery: Float = 30
+    var temperature: Float = -4
+
+    // Where it stands. Keys match the simulation's surfaces (-2 = Dock, -1 = bottom edge).
+    var hostKey = -2
+    var hostRect: CGRect?
+    var offsetX: Float = 0           // position relative to the host's left edge
+    var userPlaced = false           // dragged somewhere by the user
+    var carried = false              // being dragged right now
+    var falling = false
+    var vy: Float = 0
+    var ghost = false                // faded because it covers a window
 
     @inline(__always) func R(_ k: Int) -> Float { radii[k] * scale * sizeScale }
 
@@ -79,6 +90,12 @@ struct Snowman {
     }
 
     var hitRect: CGRect? {
+        guard !ghost || carried else { return nil }
+        return bodyRect
+    }
+
+    /// Bounding box of the standing snowman (also used to check whether it covers a window).
+    var bodyRect: CGRect? {
         guard phase == .standing || phase == .dressing, levels > 0 else { return nil }
         let r0 = R(0)
         let top = (ball(levels - 1).map { $0.y + $0.r } ?? baseY) + 4
@@ -86,6 +103,7 @@ struct Snowman {
     }
 
     var isMoving: Bool {
+        if carried || falling { return true }
         switch phase {
         case .rolling, .dressing, .collapsing, .melting: return true
         default: return wobble > 0.01 || wave > 0 || armThrow > 0.01 || !loose.isEmpty || carrot != nil
@@ -103,7 +121,8 @@ struct Snowman {
 
         switch phase {
         case .absent:
-            nextBuild -= dt
+            // Too warm to build a snowman.
+            if temperature <= 1 { nextBuild -= dt }
             if nextBuild <= 0 { start() }
         case .rolling:
             if t >= Self.rollTime * 3 { phase = .dressing; t = 0 }
@@ -118,12 +137,17 @@ struct Snowman {
             }
             nextThrow -= dt
             if nextThrow <= 0 { nextThrow = throwEvery * .random(in: 0.6...1.4); wantsThrow = true }
-            if life <= 0 { phase = .collapsing; t = 0; dropCarrot() }
+            if temperature > 0.5 && !carried {
+                // Thaw: the snowman slowly shrinks.
+                scale -= dt * temperature * 0.0035
+                if scale < 0.35 { phase = .melting; t = (1 - scale) * 6 }
+            }
+            if life <= 0 && !carried { phase = .collapsing; t = 0; dropCarrot() }
         case .collapsing:
             if levels == 3 && t > 0.8 { popTop(debris: &debris, vx: 70) }
             if t > 2.4 { phase = .melting; t = 0 }
         case .melting:
-            scale = max(0.05, 1 - t / 6)
+            scale = min(scale, max(0.05, 1 - t / 6))
             if t >= 6 { reset(next: rebuildDelay * .random(in: 0.7...1.3)) }
         }
 
@@ -174,6 +198,9 @@ struct Snowman {
 
     private mutating func reset(next: Float) {
         phase = .absent
+        carried = false
+        falling = false
+        ghost = false
         t = 0
         nextBuild = next
         levels = 3
@@ -230,6 +257,14 @@ struct Snowman {
     // MARK: Drawing
 
     func build(into out: inout [Vertex]) {
+        let start = out.count
+        buildBody(into: &out)
+        if ghost && !carried {
+            for i in start..<out.count { out[i].a *= 0.22 }
+        }
+    }
+
+    private func buildBody(into out: inout [Vertex]) {
         let center: RGBA = (1, 1, 1, 1)
         let rim: RGBA = (0.78, 0.84, 0.94, 1)
         let dark: RGBA = (0.13, 0.13, 0.17, 1)

@@ -10,13 +10,20 @@ enum Snapshot {
         let screen = CGRect(origin: .zero, size: size)
         let visible = CGRect(x: 0, y: 64, width: 1200, height: 668)
         let sim = Simulation(screenFrame: screen, visibleFrame: visible, hostsSnowman: true)
-        let wins = [TrackedWindow(id: 1, frame: CGRect(x: 140, y: 250, width: 520, height: 360)),
+        var wins = [TrackedWindow(id: 1, frame: CGRect(x: 140, y: 250, width: 520, height: 360)),
                     TrackedWindow(id: 2, frame: CGRect(x: 560, y: 160, width: 470, height: 330))]
+        if ProcessInfo.processInfo.environment["VLOCKA_MAX"] != nil {
+            // A zoomed window filling the visible frame (down to the Dock).
+            wins = [TrackedWindow(id: 3, frame: CGRect(x: 0, y: 62, width: 1200, height: 666))]
+        }
         let dock = CGRect(x: 330, y: 6, width: 540, height: 56)
         let icons = [CGRect(x: 1110, y: 620, width: 52, height: 52), CGRect(x: 1110, y: 530, width: 52, height: 52)]
         var cfg = SimConfig()
         cfg.apply(.blizzard)
         cfg.frost = true
+        let env = ProcessInfo.processInfo.environment
+        cfg.temperature = Double(env["VLOCKA_TEMP"] ?? "") ?? -15
+        cfg.snowmanCount = Double(env["VLOCKA_SNOWMEN"] ?? "") ?? 3
         cfg.sparkle = true
         var t = 0.0
         let dt = 1.0 / 30

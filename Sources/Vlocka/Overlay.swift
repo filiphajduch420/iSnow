@@ -94,11 +94,17 @@ final class Overlay: NSObject {
     }
 }
 
-/// Small panel right above the snowman – the only place that catches clicks.
+/// Small panel right above a snowman – the only place that catches clicks.
+/// A click knocks the snowman; dragging carries it somewhere else.
 @MainActor
 final class SnowmanPanel {
     private let panel: NSPanel
+    private let view = ClickView()
     var onClick: ((CGPoint) -> Void)?
+    var onDrag: ((CGPoint) -> Void)?
+    var onDrop: ((CGPoint) -> Void)?
+
+    var isDragging: Bool { view.dragging }
 
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -110,13 +116,15 @@ final class SnowmanPanel {
         panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        let v = ClickView()
-        v.onClick = { [weak self] p in self?.onClick?(p) }
-        panel.contentView = v
+        view.onClick = { [weak self] p in self?.onClick?(p) }
+        view.onDrag = { [weak self] p in self?.onDrag?(p) }
+        view.onDrop = { [weak self] p in self?.onDrop?(p) }
+        panel.contentView = view
     }
 
     /// `rect` in global coordinates, nil = hide.
     func update(_ rect: CGRect?) {
+        if view.dragging { return }            // keep the panel still while dragging
         guard let rect else {
             if panel.isVisible { panel.orderOut(nil) }
             return
@@ -128,14 +136,40 @@ final class SnowmanPanel {
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
-    private final class ClickView: NSView {
+    func close() { panel.orderOut(nil) }
+
+    final class ClickView: NSView {
         var onClick: ((CGPoint) -> Void)?
+        var onDrag: ((CGPoint) -> Void)?
+        var onDrop: ((CGPoint) -> Void)?
+        private(set) var dragging = false
+        private var start: CGPoint = .zero
+
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
         override func mouseDown(with event: NSEvent) {
-            guard let w = window else { return }
-            let p = w.convertPoint(toScreen: event.locationInWindow)
-            onClick?(p)
+            start = NSEvent.mouseLocation
+            dragging = false
+            NSCursor.closedHand.push()
         }
-        override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+        override func mouseDragged(with event: NSEvent) {
+            let p = NSEvent.mouseLocation
+            if !dragging && hypot(p.x - start.x, p.y - start.y) > 4 { dragging = true }
+            if dragging { onDrag?(p) }
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            NSCursor.pop()
+            let p = NSEvent.mouseLocation
+            if dragging {
+                dragging = false
+                onDrop?(p)
+            } else {
+                onClick?(p)
+            }
+        }
+
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
     }
 }
