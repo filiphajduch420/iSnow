@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Christmas decorations: a decorated tree with presents, a garland of lights under the menu bar.
@@ -32,19 +33,88 @@ enum Christmas {
     nonisolated(unsafe) static var bulbScale: Float = 1
     nonisolated(unsafe) static var glow: Float = 1
 
-    static func bulb(_ out: inout [Vertex], x: Float, y: Float, r rIn: Float, color c: RGBA, b bIn: Float, alpha: Float) {
-        let r = rIn * bulbScale
+    static let glowSegments = 14, bulbSegments = 10
+
+    /// Colours of a bulb at brightness `bIn`: the glow disc's centre, the bulb's centre and its rim.
+    @inline(__always)
+    static func bulbColors(_ c: RGBA, b bIn: Float, alpha: Float) -> (glow: RGBA, center: RGBA, rim: RGBA) {
         let b = bIn * min(1, 0.35 + 0.65 * glow)          // dimmer bulbs when the glow is turned down
-        // glow
-        if glow > 0.02 {
-            Mesh.circle(&out, cx: x, cy: y, r: r * (2.2 + 1.1 * glow), center: (c.0, c.1, c.2, min(1, 0.45 * bIn * alpha * glow)),
-                        rim: (c.0, c.1, c.2, 0), segments: 14)
-        }
-        // bulb
         let lit: RGBA = (c.0 * (0.45 + 0.55 * b) + 0.25 * b, c.1 * (0.45 + 0.55 * b) + 0.25 * b,
                          c.2 * (0.45 + 0.55 * b) + 0.25 * b, alpha)
-        Mesh.circle(&out, cx: x, cy: y, r: r, center: (min(1, lit.0 + 0.3 * b), min(1, lit.1 + 0.3 * b), min(1, lit.2 + 0.3 * b), alpha),
-                    rim: lit, segments: 10)
+        return ((c.0, c.1, c.2, min(1, 0.45 * bIn * alpha * glow)),
+                (min(1, lit.0 + 0.3 * b), min(1, lit.1 + 0.3 * b), min(1, lit.2 + 0.3 * b), alpha), lit)
+    }
+
+    static func bulb(_ out: inout [Vertex], x: Float, y: Float, r rIn: Float, color c: RGBA, b bIn: Float, alpha: Float) {
+        var none: [LightCache.Slot]?
+        bulb(&out, x: x, y: y, r: rIn, color: c, b: bIn, alpha: alpha, index: 0, slots: &none)
+    }
+
+    /// `slots` (when given) records where the bulb's vertices are, so a cached copy can be re-lit.
+    private static func bulb(_ out: inout [Vertex], x: Float, y: Float, r rIn: Float, color c: RGBA, b bIn: Float,
+                             alpha: Float, index: Int, slots: inout [LightCache.Slot]?) {
+        let r = rIn * bulbScale
+        let col = bulbColors(c, b: bIn, alpha: alpha)
+        var glowStart = -1
+        // glow
+        if glow > 0.02 {
+            glowStart = out.count
+            Mesh.circle(&out, cx: x, cy: y, r: r * (2.2 + 1.1 * glow), center: col.glow,
+                        rim: (c.0, c.1, c.2, 0), segments: glowSegments)
+        }
+        // bulb
+        let bodyStart = out.count
+        Mesh.circle(&out, cx: x, cy: y, r: r, center: col.center, rim: col.rim, segments: bulbSegments)
+        slots?.append(LightCache.Slot(glow: Int32(glowStart), body: Int32(bodyStart), index: Int32(index), color: c, alpha: alpha))
+    }
+
+    /// Garland and tree geometry, built once: the shapes never change between frames, only the brightness
+    /// of the bulbs (and the star's pulse), which `relight` writes into the copied vertices.
+    struct LightCache {
+        struct Slot { var glow, body, index: Int32; var color: RGBA; var alpha: Float }
+        var key = SIMD8<Float>(repeating: .nan)   // what the geometry was built for (NaN: nothing yet)
+        var occluders: [CGRect] = []
+        var verts: [Vertex] = []
+        var slots: [Slot] = []
+        var pulse = -1                    // first vertex of the tree star's pulsing glow (-1 = none)
+
+        /// Empties the cache for new geometry (keeping its storage); returns the slot list to fill.
+        mutating func reset(key: SIMD8<Float>, occluders: [CGRect]) -> [Slot]? {
+            self.key = key
+            self.occluders = occluders
+            verts.removeAll(keepingCapacity: true)
+            pulse = -1
+            var s = slots
+            slots = []
+            s.removeAll(keepingCapacity: true)
+            return s
+        }
+
+        /// Brightness of each bulb at `t` written into `out[base...]` (a copy of `verts`); `fade` = tree ghost alpha.
+        /// Relies on `Mesh.circle`'s layout: one triangle per segment, centre vertex first, then two rim
+        /// vertices (and no snow material on these small, coloured discs).
+        func relight(_ out: inout [Vertex], base: Int, t: Float, style: LightStyle, fade a: Float) {
+            out.withUnsafeMutableBufferPointer { buf in
+                @inline(__always) func paint(_ i: Int, _ c: RGBA) {
+                    buf[i].r = c.0; buf[i].g = c.1; buf[i].b = c.2; buf[i].a = a < 1 ? c.3 * a : c.3
+                }
+                for s in slots {
+                    let col = bulbColors(s.color, b: brightness(Int(s.index), t, style: style), alpha: s.alpha)
+                    if s.glow >= 0 {
+                        let g = base + Int(s.glow)
+                        for k in 0..<glowSegments { paint(g + 3 * k, col.glow) }
+                    }
+                    let o = base + Int(s.body)
+                    for k in 0..<bulbSegments {
+                        paint(o + 3 * k, col.center); paint(o + 3 * k + 1, col.rim); paint(o + 3 * k + 2, col.rim)
+                    }
+                }
+                if pulse >= 0 {
+                    let c = starGlow(t)
+                    for k in 0..<starGlowSegments { paint(base + pulse + 3 * k, c) }
+                }
+            }
+        }
     }
 
     // MARK: Garland under the menu bar
@@ -52,6 +122,26 @@ enum Christmas {
     /// `skip(x)` hides the part of the garland behind an open menu.
     static func garland(_ out: inout [Vertex], width W: Float, y top: Float, t: Float, style: LightStyle,
                         skip: (Float) -> Bool = { _ in false }) {
+        var none: [LightCache.Slot]?
+        garland(&out, width: W, y: top, t: t, style: style, slots: &none, skip: skip)
+    }
+
+    /// Same picture as `garland`, from `cache`. `occluders` are what `skip` depends on (open menus).
+    static func garland(_ out: inout [Vertex], cache: inout LightCache, width W: Float, y top: Float, t: Float,
+                        style: LightStyle, occluders: [CGRect], skip: (Float) -> Bool) {
+        let key = SIMD8<Float>(W, top, Float(style.rawValue), bulbScale, glow, 0, 0, 0)
+        if cache.key != key || cache.occluders != occluders {
+            var slots = cache.reset(key: key, occluders: occluders)
+            garland(&cache.verts, width: W, y: top, t: t, style: style, slots: &slots, skip: skip)
+            cache.slots = slots ?? []
+        }
+        let base = out.count
+        out.append(contentsOf: cache.verts)
+        cache.relight(&out, base: base, t: t, style: style, fade: 1)
+    }
+
+    private static func garland(_ out: inout [Vertex], width W: Float, y top: Float, t: Float, style: LightStyle,
+                                slots: inout [LightCache.Slot]?, skip: (Float) -> Bool) {
         let k = bulbScale
         let span: Float = 150, sag: Float = 11 * (0.6 + 0.4 * k), spacing: Float = 19 * max(0.7, k)
         let wire: RGBA = (0.12, 0.2, 0.12, 0.9)
@@ -78,7 +168,8 @@ enum Christmas {
                 let y = yAt(x) - 3.5 * k
                 let c = bulbColor(bulbIndex, style: style)
                 Mesh.line(&out, (x, yAt(x)), (x, y + 2), width: 1, color: wire)
-                bulb(&out, x: x, y: y, r: 2.6, color: c, b: brightness(bulbIndex, t, style: style), alpha: 1)
+                bulb(&out, x: x, y: y, r: 2.6, color: c, b: brightness(bulbIndex, t, style: style), alpha: 1,
+                     index: bulbIndex, slots: &slots)
                 bulbIndex += 1
                 x += spacing
             }
@@ -144,6 +235,33 @@ enum Christmas {
 
     static func tree(_ out: inout [Vertex], x: Float, baseY: Float, scale s: Float, t: Float,
                      style: LightStyle, alpha a: Float) {
+        var none: [LightCache.Slot]?
+        var pulse = -1
+        tree(&out, x: x, baseY: baseY, scale: s, t: t, style: style, alpha: a, slots: &none, pulse: &pulse)
+    }
+
+    /// Same picture as `tree`, from `cache` (rebuilt when the tree moves or the settings change).
+    static func tree(_ out: inout [Vertex], cache: inout LightCache, x: Float, baseY: Float, scale s: Float, t: Float,
+                     style: LightStyle, alpha a: Float) {
+        let key = SIMD8<Float>(x, baseY, s, Float(style.rawValue), bulbScale, glow, a, 0)
+        if cache.key != key {
+            var slots = cache.reset(key: key, occluders: [])
+            tree(&cache.verts, x: x, baseY: baseY, scale: s, t: t, style: style, alpha: a, slots: &slots, pulse: &cache.pulse)
+            cache.slots = slots ?? []
+        }
+        let base = out.count
+        out.append(contentsOf: cache.verts)
+        cache.relight(&out, base: base, t: t, style: style, fade: a)
+    }
+
+    static let starGlowSegments = 18
+    static func starGlow(_ t: Float) -> RGBA {
+        let pulse = 0.75 + 0.25 * sin(t * 2.3)
+        return (1, 0.88, 0.4, 0.45 * pulse)
+    }
+
+    private static func tree(_ out: inout [Vertex], x: Float, baseY: Float, scale s: Float, t: Float,
+                             style: LightStyle, alpha a: Float, slots: inout [LightCache.Slot]?, pulse: inout Int) {
         let start = out.count
         // presents
         let gifts: [(Float, Float, Float, RGBA, RGBA)] = [(-30, 15, 12, (0.85, 0.15, 0.2, 1), (1, 0.85, 0.3, 1)),
@@ -180,12 +298,12 @@ enum Christmas {
                                         (-14, 52), (4, 48), (18, 54), (-4, 62), (12, 74), (-12, 76), (0, 84)]
         for (i, p) in lights.enumerated() {
             bulb(&out, x: x + p.0 * s, y: baseY + p.1 * s, r: 1.5 * s, color: bulbColor(i + 3, style: style),
-                 b: brightness(i + 7, t, style: style), alpha: 1)
+                 b: brightness(i + 7, t, style: style), alpha: 1, index: i + 7, slots: &slots)
         }
         // star with a soft pulse
         let sy = baseY + 94 * s
-        let pulse = 0.75 + 0.25 * sin(t * 2.3)
-        Mesh.circle(&out, cx: x, cy: sy, r: 16 * s, center: (1, 0.88, 0.4, 0.45 * pulse), rim: (1, 0.88, 0.4, 0), segments: 18)
+        pulse = out.count - start
+        Mesh.circle(&out, cx: x, cy: sy, r: 16 * s, center: starGlow(t), rim: (1, 0.88, 0.4, 0), segments: starGlowSegments)
         star(&out, cx: x, cy: sy, r: 7.5 * s, color: (1, 0.86, 0.2, 1))
         // presents in front of the trunk
         for g in gifts {

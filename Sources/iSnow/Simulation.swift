@@ -52,6 +52,7 @@ final class Pile {
     var frostSeed: UInt64 = 0
     var limit: [Float] = []          // per-bin drawing limit (the Dock's snow stays a thin ledge under windows)
     var lastSeen: Double = 0         // time of the last sync (for window speed)
+    var landIndex = -1               // position in the simulation's `landables` (for `Simulation.Bands`)
     var parkedSince: Double?         // window went away (other Space, hidden) – kept, not drawn
     /// The drift a window had before it went full screen – given back when it returns to that frame.
     var stash: (rect: CGRect, bins: [Float], icicles: [Icicle], frost: Float)?
@@ -101,8 +102,19 @@ final class Simulation {
     private var landables: [Pile] = []
     private var columns: [[Pile]] = []          // landables bucketed by 32-pt screen column
     private static let columnW: Float = 32
+    private var bandStore = Bands()             // reused between frames (see `Bands`)
     private var menuIcicles: [Icicle] = []
     private var menuSnow: [Float] = []
+    // Cached geometry. The menu-bar strip changes a few bins at a time; the garland and the tree only
+    // change their brightness between frames (see `Christmas.LightCache`).
+    private var menuMesh: [Vertex] = []
+    private var menuSlot: [Int] = []            // per bin: first vertex of its block in `menuMesh`, -1 = none
+    private var menuGrown: [Int] = []           // bins whose powder grew since the last build
+    private var menuMeshValid = false
+    private var menuBlock: [Vertex] = []        // scratch for one bin's block
+    private var menuMeshKey: (bar: CGFloat, occ: [CGRect]) = (-1, [])
+    private var garlandCache = Christmas.LightCache()
+    private var treeCache = Christmas.LightCache()
     var snowmen: [Snowman] = []
     private var windowRects: [(key: Int, rect: CGRect)] = []   // front to back
     private var dockLocal: CGRect?
@@ -137,6 +149,7 @@ final class Simulation {
     private var fullscreen = false
     private var lastMouse: SIMD2<Float>?
     private var shovelAt: SIMD2<Float>?        // cursor position while the ⌥ shovel is active
+    private var kickedUntil: Double = 0        // the cursor scattered flakes – they fly fast until then
     /// True when a window moved during the last sync (the app then polls faster).
     private(set) var windowMoving = false
     private var tint: (Float, Float, Float) = (1, 1, 1)
@@ -568,32 +581,51 @@ final class Simulation {
         let temp = Float(cfg.temperature)
         let sleet = temp > 4          // too warm: wet flakes melt on contact
 
-        // Flakes
-        var i = 0
-        while i < flakes.count {
-            var f = flakes[i]
-            let oy = f.y
-            f.phase += f.freq * fdt
-            f.x += (wind * (0.35 + f.depth) + sin(f.phase) * f.amp + f.vx) * fdt
-            f.y -= f.vy * fdt
-            if f.vx != 0 { f.vx *= max(0, 1 - 2.5 * fdt); if abs(f.vx) < 1 { f.vx = 0 } }
-            if f.depth > 0.3, !sleet, !fullscreen, let (p, b) = hit(x: f.x, oldY: oy, newY: f.y) {
-                deposit(p, b, 0.35 * acc * (0.6 + f.depth))
-                flakes.swapAt(i, flakes.count - 1); flakes.removeLast(); continue
+        // Flakes (compacted in place; the invariants are hoisted out of the loop – it runs for thousands)
+        let menuLine = H - Float(menuBarHeight)
+        let onMenuBar = cfg.onMenuBar, landing = !sleet && !fullscreen
+        let w = W, depositAmount = 0.35 * acc, menuBins = menuSnow.count
+        let drift = wind
+        var kept = 0
+        var bands = Bands()
+        swap(&bands, &bandStore)
+        if landing && !flakes.isEmpty { bands.build(landables, columns: columns) }
+        let columnCount = landing ? columns.count : 0
+        flakes.withUnsafeMutableBufferPointer { buf in
+            for k in 0..<buf.count {
+                var f = buf[k]
+                let oy = f.y
+                f.phase += f.freq * fdt
+                f.x += (drift * (0.35 + f.depth) + sin(f.phase) * f.amp + f.vx) * fdt
+                f.y -= f.vy * fdt
+                if f.vx != 0 { f.vx *= max(0, 1 - 2.5 * fdt); if abs(f.vx) < 1 { f.vx = 0 } }
+                // Only a flake that crosses the height of some drift top in its column can land.
+                if f.depth > 0.3, landing, case let c = Int(f.x / Self.columnW), c >= 0, c < columnCount,
+                   bands.crosses(column: c, from: oy, to: f.y),
+                   let (p, b) = hit(x: f.x, oldY: oy, newY: f.y) {
+                    deposit(p, b, depositAmount * (0.6 + f.depth))
+                    bands.refresh(p, around: b, columns: columns)
+                    continue
+                }
+                if onMenuBar, f.depth > 0.6, oy > menuLine, f.y <= menuLine {
+                    // Powder snow along the bottom edge of the menu bar
+                    let b = Int(f.x / Self.binW)
+                    if b >= 0 && b < menuBins && menuSnow[b] < 2.2 {
+                        menuSnow[b] += 0.12
+                        if menuGrown.count < 256 { menuGrown.append(b) } else { menuMeshValid = false }
+                    }
+                }
+                if f.y < -10 { continue }
+                if f.x < -30 { f.x += w + 60 } else if f.x > w + 30 { f.x -= w + 60 }
+                buf[kept] = f
+                kept += 1
             }
-            if cfg.onMenuBar, f.depth > 0.6, oy > H - Float(menuBarHeight), f.y <= H - Float(menuBarHeight) {
-                // Powder snow along the bottom edge of the menu bar
-                let b = Int(f.x / Self.binW)
-                if b >= 0 && b < menuSnow.count && menuSnow[b] < 2.2 { menuSnow[b] += 0.12 }
-            }
-            if f.y < -10 { flakes.swapAt(i, flakes.count - 1); flakes.removeLast(); continue }
-            if f.x < -30 { f.x += W + 60 } else if f.x > W + 30 { f.x -= W + 60 }
-            flakes[i] = f
-            i += 1
         }
+        if kept < flakes.count { flakes.removeLast(flakes.count - kept) }
+        swap(&bands, &bandStore)
 
         // Falling snow chunks
-        i = 0
+        var i = 0
         while i < debris.count {
             var d = debris[i]
             let oy = d.y
@@ -659,7 +691,7 @@ final class Simulation {
                     for k in p.bins.indices where p.bins[k] > 0 { p.bins[k] = max(0, p.bins[k] - base); any = true }
                     if any { p.dirty = true }
                 }
-                for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - base * 0.2) }
+                for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - base * 0.2); menuMeshValid = false }
             }
             // Frost on windows: grows on still windows when it is below zero, thaws above.
             let frostTarget: Float = cfg.windowFrost && temp < 0 ? min(1, -temp / 15) : 0
@@ -715,6 +747,7 @@ final class Simulation {
             }
             if cfg.onMenuBar && cfg.icicles && menuBarHeight > 0 {
                 if menuIcicles.isEmpty {
+                    menuMeshValid = false
                     let count = max(4, Int(W / 140))
                     menuIcicles = (0..<count).map { _ in
                         let m = Float.random(in: 5...18)
@@ -723,23 +756,30 @@ final class Simulation {
                     }
                 }
                 if temp > 0 {
-                    for k in menuIcicles.indices { menuIcicles[k].len = max(0, menuIcicles[k].len - temp * 0.12 * tick) }
+                    for k in menuIcicles.indices where menuIcicles[k].len > 0 {
+                        menuIcicles[k].len = max(0, menuIcicles[k].len - temp * 0.12 * tick)
+                        menuMeshValid = false
+                    }
                 } else {
                     let target = coldFactor * Float(cfg.icicleLength)
                     for k in menuIcicles.indices {
                         let goal = menuIcicles[k].maxLen * target
                         if menuIcicles[k].len < goal {
                             menuIcicles[k].len = min(goal, menuIcicles[k].len + menuIcicles[k].rate * target * tick)
+                            menuMeshValid = false
                         } else if menuIcicles[k].len > goal + 0.5 {
                             menuIcicles[k].len = goal
+                            menuMeshValid = false
                         }
                     }
                 }
             } else if !menuIcicles.isEmpty {
                 menuIcicles = []
+                menuMeshValid = false
             }
             if !cfg.onMenuBar || menuBarHeight == 0, menuSnow.contains(where: { $0 > 0 }) {
                 for k in menuSnow.indices { menuSnow[k] = 0 }
+                menuMeshValid = false
             }
         }
 
@@ -858,6 +898,23 @@ final class Simulation {
         plow.startAutopilot(leftToRight: Bool.random(), screenWidth: W)
     }
 
+    /// True while something fast is on screen and the display link should run at the user's full rate.
+    /// Ambient snowfall, faded full-screen snow, twinkling lights, glints, a snowman that just stands
+    /// (its eyes following the cursor) and frozen (paused) scenes return false.
+    var wantsFullFrameRate: Bool {
+        // Particles are drawn in every mode: falling clumps and powder (window drift, splashes, skier and
+        // plow spray, Santa's sparkles), snowballs, a window being moved, flakes the cursor just kicked.
+        if !debris.isEmpty || !snowballs.isEmpty || windowMoving || time < kickedUntil { return true }
+        // Everything else is mesh, which is not drawn over a full-screen app.
+        if fullscreen { return false }
+        if !shards.isEmpty || !skiers.isEmpty || plow.visible || santa != nil || shovelAt != nil { return true }
+        if !queuedSkiers.isEmpty && !cfg.paused { return true }        // the rest of a group about to set off
+        guard hostsSnowman else { return false }
+        // A snowman's life cycle is frozen while paused, so only one in your hand or in the air moves then.
+        let alive = cfg.snowman && !cfg.paused
+        return snowmen.contains { $0.carried || $0.falling || (alive && !$0.hidden && $0.isMoving) }
+    }
+
     /// Does anything still need animating? If not, the display link goes to sleep.
     var isAnimating: Bool {
         if !cfg.paused && !fullscreen { return true }
@@ -879,12 +936,105 @@ final class Simulation {
     private func rebuildColumns() {
         let n = Int(W / Self.columnW) + 1
         var cols = Array(repeating: [Pile](), count: n)
-        for p in landables {
+        for (k, p) in landables.enumerated() {
+            p.landIndex = k
             let a = max(0, Int(Float(p.rect.minX) / Self.columnW))
             let b = min(n - 1, Int(Float(p.rect.maxX) / Self.columnW))
             if a <= b { for c in a...b { cols[c].append(p) } }
         }
         columns = cols
+    }
+
+    /// For each 32-pt column and each surface in it, the range [lo, hi] its snow top spans there.
+    /// `hit` can only find a landing if the step from `oldY` to `newY` reaches into one of these
+    /// ranges, so the flake loop skips it for the (many) flakes that are nowhere near a drift.
+    @MainActor struct Bands {
+        private var start: [Int] = []        // bands of column c: start[c] ..< start[c + 1]
+        private var lo: [Float] = [], hi: [Float] = []
+        private var pile: [Int] = []          // `landIndex` of the band's surface
+        private var fill: [Int] = []
+        private var valid = false             // false: every flake goes to `hit`
+
+        /// One pass over each surface's bins. `columns` lists the surfaces of each column in `landables`
+        /// order (see `rebuildColumns`), so the bands of a column come out in the same order.
+        mutating func build(_ landables: [Pile], columns: [[Pile]]) {
+            let nc = columns.count
+            start.removeAll(keepingCapacity: true)
+            var total = 0
+            for list in columns { start.append(total); total += list.count }
+            start.append(total)
+            if lo.count != total {
+                lo = Array(repeating: 0, count: total); hi = lo
+                pile = Array(repeating: -1, count: total)
+            }
+            fill.removeAll(keepingCapacity: true)
+            fill.append(contentsOf: start.dropLast())
+            valid = true
+            let w = Simulation.columnW, bw = Simulation.binW
+            for (k, p) in landables.enumerated() {
+                let minX = Float(p.rect.minX), top = Float(p.rect.maxY)
+                let a = max(0, Int(minX / w)), b = min(nc - 1, Int(Float(p.rect.maxX) / w))
+                guard a <= b else { continue }
+                p.bins.withUnsafeBufferPointer { bins in
+                    for c in a...b {
+                        let j = fill[c]
+                        guard j < start[c + 1] else { valid = false; return }
+                        fill[c] = j + 1
+                        let x0 = Float(c) * w - (c == 0 ? w : 0), x1 = Float(c + 1) * w
+                        let b0 = max(0, Int(((x0 - minX) / bw).rounded(.down)) - 1)
+                        let b1 = min(bins.count - 1, Int(((x1 - minX) / bw).rounded(.down)) + 1)
+                        var l = Float.infinity, h = -Float.infinity
+                        if b0 <= b1 { for i in b0...b1 { l = min(l, bins[i]); h = max(h, bins[i]) } }
+                        lo[j] = top + l; hi[j] = top + h; pile[j] = k
+                    }
+                }
+            }
+            if valid { for c in 0..<nc where fill[c] != start[c + 1] { valid = false; break } }
+        }
+
+        /// Can a flake in column `c` moving from `oldY` down to `newY` cross a snow top there?
+        @inline(__always)
+        func crosses(column c: Int, from oldY: Float, to newY: Float) -> Bool {
+            guard valid, c + 1 < start.count else { return true }
+            for j in start[c]..<start[c + 1] where newY < hi[j] && oldY >= lo[j] { return true }
+            return false
+        }
+
+        /// `deposit` changed bins around `b` (and the ends of a raised surface): update those columns.
+        mutating func refresh(_ p: Pile, around b: Int, columns: [[Pile]]) {
+            guard valid, start.count == columns.count + 1 else { return }
+            let x0 = Float(p.rect.minX), n = p.bins.count
+            func update(_ k0: Int, _ k1: Int) {
+                let c0 = max(0, Int((x0 + Float(k0) * Simulation.binW) / Simulation.columnW) - 1)
+                let c1 = min(columns.count - 1, Int((x0 + Float(k1 + 1) * Simulation.binW) / Simulation.columnW) + 1)
+                guard c0 <= c1 else { return }
+                for c in c0...c1 {
+                    for j in start[c]..<start[c + 1] where pile[j] == p.landIndex {
+                        let r = Self.range(p, column: c)
+                        lo[j] = r.lo; hi[j] = r.hi
+                    }
+                }
+            }
+            update(max(0, b - 8), min(n - 1, b + 8))
+            if p.kind != .ground { update(0, 0); update(n - 1, n - 1) }
+        }
+
+        /// Lowest and highest snow top of `p` over the bins a flake in column `c` can reach (one bin of
+        /// slack on each side for rounding; column 0 also holds x in (−32, 0), as in `hit`).
+        private static func range(_ p: Pile, column c: Int) -> (lo: Float, hi: Float) {
+            let w = Simulation.columnW, bw = Simulation.binW
+            let x0 = Float(c) * w - (c == 0 ? w : 0), x1 = Float(c + 1) * w
+            let minX = Float(p.rect.minX)
+            let b0 = max(0, Int(((x0 - minX) / bw).rounded(.down)) - 1)
+            let b1 = min(p.bins.count - 1, Int(((x1 - minX) / bw).rounded(.down)) + 1)
+            guard b0 <= b1 else { return (.infinity, -.infinity) }
+            var l = Float.infinity, h = -Float.infinity
+            p.bins.withUnsafeBufferPointer { bins in
+                for k in b0...b1 { l = min(l, bins[k]); h = max(h, bins[k]) }
+            }
+            let top = Float(p.rect.maxY)
+            return (top + l, top + h)
+        }
     }
 
     private func hit(x: Float, oldY: Float, newY: Float) -> (Pile, Int)? {
@@ -1031,6 +1181,7 @@ final class Simulation {
     func shakeAll() {
         for p in piles.values { shake(p, push: 0); p.lastMove = CACurrentMediaTime() }
         for k in menuSnow.indices { menuSnow[k] = 0 }
+        menuMeshValid = false
         for ic in menuIcicles where ic.len > 2 {
             shards.append(Shard(x: ic.x, y: H - Float(menuBarHeight), vy: 0, len: ic.len, width: ic.width))
         }
@@ -1072,15 +1223,20 @@ final class Simulation {
         let speed = (v.x * v.x + v.y * v.y).squareRoot()
         guard speed > 40, speed < 20000 else { return }
         let r: Float = 70
-        for i in flakes.indices {
-            let dx = flakes[i].x - m.x, dy = flakes[i].y - m.y
-            let d2 = dx * dx + dy * dy
-            if d2 < r * r {
-                let fall = 1 - d2.squareRoot() / r
-                flakes[i].vx += v.x * 0.35 * fall
-                flakes[i].y += v.y * 0.02 * fall
+        var kicked = false
+        flakes.withUnsafeMutableBufferPointer { buf in
+            for i in buf.indices {
+                let dx = buf[i].x - m.x, dy = buf[i].y - m.y
+                let d2 = dx * dx + dy * dy
+                if d2 < r * r {
+                    let fall = 1 - d2.squareRoot() / r
+                    buf[i].vx += v.x * 0.35 * fall
+                    buf[i].y += v.y * 0.02 * fall
+                    kicked = true
+                }
             }
         }
+        if kicked { kickedUntil = time + 1.0 }
         guard speed > 260 else { return }
         for p in landables {
             let rel = m.x - Float(p.rect.minX)
@@ -1411,19 +1567,20 @@ final class Simulation {
 
     func buildParticles(into out: inout [Particle]) {
         let t = drawTime
+        out.reserveCapacity(out.count + flakes.count + debris.count + snowballs.count)
         // Calm over the active window: flakes there fade to a light dusting (soft 40-pt edge).
-        let calm = cfg.calmActive && !fullscreen ? activeRect : nil
+        let calm = cfg.calmActive && !fullscreen ? activeRect.map { $0.standardized } : nil
+        let hasCalm = calm.map { !$0.isEmpty } ?? false
+        let cx0 = Float(calm?.minX ?? 0), cx1 = Float(calm?.maxX ?? 0)
+        let cy0 = Float(calm?.minY ?? 0), cy1 = Float(calm?.maxY ?? 0)
         let fade: Float = fullscreen ? Float(cfg.fullscreenSnow) : 1
         for f in flakes {
             var a = f.alpha * fade, sz = f.size
-            if let r = calm {
-                let px = CGFloat(f.x), py = CGFloat(f.y)
-                if r.contains(CGPoint(x: px, y: py)) {
-                    let edge = Float(min(px - r.minX, r.maxX - px, py - r.minY, r.maxY - py))
-                    let k = min(1, edge / 40)
-                    a *= 1 - 0.78 * k
-                    sz *= 1 - 0.25 * k
-                }
+            if hasCalm, f.x >= cx0, f.x < cx1, f.y >= cy0, f.y < cy1 {
+                let edge = min(f.x - cx0, cx1 - f.x, f.y - cy0, cy1 - f.y)
+                let k = min(1, edge / 40)
+                a *= 1 - 0.78 * k
+                sz *= 1 - 0.25 * k
             }
             if f.sparkle {
                 let tw = 0.55 + 0.45 * sin(t * 9 + f.phase * 3)
@@ -1439,11 +1596,17 @@ final class Simulation {
         for s in snowballs { out.append(Particle(x: s.x, y: s.y, size: -7.5, alpha: 1)) }
     }
 
-    func buildMesh(into out: inout [Vertex]) {
+    func buildMesh(into out: inout [Vertex]) { buildMesh(into: &out, cached: true) }
+
+    /// For tests: the same mesh built without the menu-bar / garland / tree caches (and without
+    /// touching them). Must be identical to `buildMesh` byte for byte.
+    func buildMeshUncached(into out: inout [Vertex]) { buildMesh(into: &out, cached: false) }
+
+    private func buildMesh(into out: inout [Vertex], cached: Bool) {
         Mesh.tint = tint
         if fullscreen {
             // Over a full-screen app only the icicles along the top stay.
-            if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out) }
+            if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out, cached: cached) }
             return
         }
         if cfg.frost { buildFrost(into: &out) }
@@ -1451,18 +1614,28 @@ final class Simulation {
             if p.dirty || p.iceDirty { rebuildMesh(p) }
             out.append(contentsOf: p.mesh)
         }
-        if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out) }
+        if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out, cached: cached) }
         for s in shards { Mesh.icicle(&out, x: s.x, top: s.y, len: s.len, width: s.width, alpha: 0.9) }
         let style = Christmas.LightStyle(rawValue: cfg.lightStyle) ?? .colorful
         Christmas.bulbScale = Float(cfg.lightSize)
         Christmas.glow = Float(cfg.lightGlow)
         let menuY = H - Float(menuBarHeight)
         if cfg.christmas && cfg.christmasGarland && menuBarHeight > 0 {
-            Christmas.garland(&out, width: W, y: menuY, t: drawTime, style: style) { x in self.underMenu(x) }
+            if cached {
+                Christmas.garland(&out, cache: &garlandCache, width: W, y: menuY, t: drawTime, style: style,
+                                  occluders: localOcc) { x in self.underMenu(x) }
+            } else {
+                Christmas.garland(&out, width: W, y: menuY, t: drawTime, style: style) { x in self.underMenu(x) }
+            }
         }
         if hostsSnowman, let p = treePos, !treeHidden {
-            Christmas.tree(&out, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: drawTime, style: style,
-                           alpha: treeGhost ? 0.22 : 1)
+            if cached {
+                Christmas.tree(&out, cache: &treeCache, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: drawTime,
+                               style: style, alpha: treeGhost ? 0.22 : 1)
+            } else {
+                Christmas.tree(&out, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: drawTime, style: style,
+                               alpha: treeGhost ? 0.22 : 1)
+            }
         }
         if hostsSnowman { for s in snowmen where !s.hidden { s.build(into: &out) } }
         for s in skiers where !localOcc.contains(where: { $0.contains(CGPoint(x: CGFloat(s.x), y: CGFloat(s.y + 10))) }) {
@@ -1568,18 +1741,54 @@ final class Simulation {
         Mesh.quad(&out, x: w - e, y: 0, w: e, h: h, bl: clear, br: ice, tr: ice, tl: clear)
     }
 
-    private func buildMenuBar(into out: inout [Vertex]) {
+    /// Powder and icicles along the bottom edge of the menu bar. The cached copy is rebuilt when an
+    /// icicle or the melt changes it (≤ 4× a second) or a menu opens; powder that grows in a bin that
+    /// already shows only rewrites that bin's 12 vertices.
+    private func buildMenuBar(into out: inout [Vertex], cached: Bool) {
+        guard cached else { _ = buildMenuBarMesh(into: &out); return }
+        if menuMeshValid, menuMeshKey.bar == menuBarHeight, menuMeshKey.occ == localOcc {
+            let y = H - Float(menuBarHeight)
+            let mat = Mesh.snowMaterial(kind: 1, anchor: (0, y))
+            for b in menuGrown where menuSlot[b] < 0 {
+                // A new bin shows up (or stays hidden under a menu): rebuild in order.
+                if menuSnow[b] > 0.2 && !underMenu(Float(b) * Self.binW) { menuMeshValid = false; break }
+            }
+            if menuMeshValid {
+                for b in menuGrown where menuSlot[b] >= 0 {
+                    menuBlock.removeAll(keepingCapacity: true)
+                    let h = menuSnow[b]
+                    Mesh.snowRect(&menuBlock, x: Float(b) * Self.binW, y: y - h * 0.5, w: Self.binW, h: h, material: mat)
+                    let o = menuSlot[b]
+                    for k in menuBlock.indices { menuMesh[o + k] = menuBlock[k] }
+                }
+            }
+        }
+        if !menuMeshValid || menuMeshKey.bar != menuBarHeight || menuMeshKey.occ != localOcc {
+            menuMesh.removeAll(keepingCapacity: true)
+            menuSlot = buildMenuBarMesh(into: &menuMesh)
+            menuMeshKey = (menuBarHeight, localOcc)
+            menuMeshValid = true
+        }
+        menuGrown.removeAll(keepingCapacity: true)
+        out.append(contentsOf: menuMesh)
+    }
+
+    /// Returns, per bin, the first vertex of its block (-1 = not drawn).
+    private func buildMenuBarMesh(into out: inout [Vertex]) -> [Int] {
         let y = H - Float(menuBarHeight)
         let bw = Self.binW
         let mat = Mesh.snowMaterial(kind: 1, anchor: (0, y))
+        var slots = Array(repeating: -1, count: menuSnow.count)
         for (i, h) in menuSnow.enumerated() where h > 0.2 {
             let l = Float(i) * bw
             if underMenu(l) { continue }
+            slots[i] = out.count
             Mesh.snowRect(&out, x: l, y: y - h * 0.5, w: bw, h: h, material: mat)
         }
         for ic in menuIcicles where ic.len > 0.6 && !underMenu(ic.x) {
             Mesh.icicle(&out, x: ic.x, top: y, len: ic.len, width: ic.width * iceWidth(ic.len), alpha: 0.85)
         }
+        return slots
     }
 }
 

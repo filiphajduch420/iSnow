@@ -202,18 +202,23 @@ iSnow is built to stay out of the way:
   snowmen); shaders are compiled from source, so there are no textures or other assets;
 - rendered at standard (1×) resolution by default – a quarter of the pixels of a 2× Retina frame
   for the GPU and the window compositor; *Sharp Retina rendering* is optional;
-- `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode and on battery;
+- `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode and on battery; faded snow
+  over full-screen apps is drawn at 30 fps, and an optional power-saving mode does the same for calm
+  snowfall, switching to the full rate only while something fast is on screen;
 - rendering stops completely when nothing is moving, while the snow is paused or hidden, over
-  full-screen apps when their snow is set to none, and while the screen is asleep or locked;
-- window positions are polled 5× per second (30× while a window is being dragged), and
-  Accessibility queries run off the main thread once per second.
+  full-screen apps when their snow is set to none, and while the screen is asleep or locked – no
+  timer runs then either;
+- window positions are polled 2.5–5× per second (10× while a mouse button is down, 30× while a
+  window is being dragged), and Accessibility queries run off the main thread every 1–3 seconds
+  (not at all while a full-screen app covers the screen).
 
 <!-- perf -->
-Measured on a 14" MacBook Pro on battery (battery saver on, 6,000-flake settings, Christmas mode):
-about 6–8 % of one CPU core and 40–60 MB of memory. Version 1.0 (2× Retina, 60 fps) needed about
-10–13 % and about 118 MB in the same situation. Nearly all of it is the system compositing a
-full-screen layer – the simulation itself takes well under a millisecond per frame. The app bundle
-is about 1 MB.
+Measured on a 14" MacBook Pro (M1 Pro) on AC power with maxed-out settings (6,000 large flakes,
+Christmas mode, 60 fps): about 10 % of one CPU core and about 40 MB of memory (version 1.1 used
+88 MB). With the optional power-saving mode (Settings › Other), which draws calm snowfall at 30 fps
+and switches to the full rate only while something fast moves, it drops to about 4–5 %. The
+simulation itself takes well under a tenth of a millisecond per frame; most of the cost is the
+system compositing a full-screen layer. The app bundle is about 1 MB.
 <!-- /perf -->
 
 ### Known limitations

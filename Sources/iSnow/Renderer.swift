@@ -216,33 +216,39 @@ final class Renderer {
         cmd.waitUntilCompleted()
     }
 
+    /// Reused every frame – only the target texture changes.
+    private let pass: MTLRenderPassDescriptor = {
+        let p = MTLRenderPassDescriptor()
+        p.colorAttachments[0].loadAction = .clear
+        p.colorAttachments[0].storeAction = .store
+        p.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        return p
+    }()
+
     private func encode(cmd: MTLCommandBuffer, texture: MTLTexture, size: CGSize, particles: [Particle],
                         mesh: [Vertex], buffers: inout FrameBuffers) {
-        let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+        let encoder = cmd.makeRenderCommandEncoder(descriptor: pass)
+        pass.colorAttachments[0].texture = nil      // don't keep the drawable alive until the next frame
+        guard let enc = encoder else { return }
         let w = Float(max(1, size.width))
         let clock = Float((CACurrentMediaTime() - startTime).truncatingRemainder(dividingBy: 3600))
         var u = Uniforms(size: SIMD2(Float(size.width), Float(size.height)), scale: Float(texture.width) / w,
                          time: clock, tint: SIMD4(tint, 1))
+        // Both pipelines read the uniforms from the same slots; bindings survive a pipeline switch.
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
 
         if !mesh.isEmpty, let buf = buffers.mesh(device: device, count: mesh.count) {
             mesh.withUnsafeBytes { buf.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
             enc.setRenderPipelineState(meshPipeline)
             enc.setVertexBuffer(buf, offset: 0, index: 0)
-            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
-            enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: mesh.count)
         }
         if !particles.isEmpty, let buf = buffers.particles(device: device, count: particles.count) {
             particles.withUnsafeBytes { buf.contents().copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
             enc.setRenderPipelineState(particlePipeline)
-            enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             enc.setVertexBuffer(buf, offset: 0, index: 0)
-            enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: particles.count)
         }
         enc.endEncoding()
@@ -250,22 +256,34 @@ final class Renderer {
 }
 
 /// Triple ring buffer – the CPU never overwrites data the GPU is still reading.
+/// Buffers grow by 1.5× and shrink again once they have been far too large for a while
+/// (e.g. after a big snow dump has landed).
 struct FrameBuffers {
     private var meshBufs: [MTLBuffer?] = [nil, nil, nil]
     private var partBufs: [MTLBuffer?] = [nil, nil, nil]
+    private var meshOversized = 0           // consecutive frames the mesh buffer was > 4× too large
+    private var partOversized = 0
     private var index = 0
+    /// Frames a buffer may stay more than 4× too large before it is reallocated smaller.
+    private static let shrinkAfter = 600
 
     mutating func mesh(device: MTLDevice, count: Int) -> MTLBuffer? {
-        get(&meshBufs, device: device, bytes: count * MemoryLayout<Vertex>.stride)
+        Self.get(&meshBufs, &meshOversized, index, device: device, bytes: count * MemoryLayout<Vertex>.stride)
     }
 
     mutating func particles(device: MTLDevice, count: Int) -> MTLBuffer? {
-        get(&partBufs, device: device, bytes: count * MemoryLayout<Particle>.stride)
+        Self.get(&partBufs, &partOversized, index, device: device, bytes: count * MemoryLayout<Particle>.stride)
     }
 
-    private func get(_ arr: inout [MTLBuffer?], device: MTLDevice, bytes: Int) -> MTLBuffer? {
-        if let b = arr[index], b.length >= bytes { return b }
+    private static func get(_ arr: inout [MTLBuffer?], _ oversized: inout Int, _ index: Int,
+                            device: MTLDevice, bytes: Int) -> MTLBuffer? {
         let cap = max(4096, Int(Double(bytes) * 1.5))
+        if let b = arr[index], b.length >= bytes {
+            if b.length <= max(4096, bytes) * 4 { oversized = 0; return b }
+            oversized += 1
+            if oversized < shrinkAfter { return b }
+            // Keeps counting, so the other two slots of the ring shrink on the next frames as well.
+        }
         arr[index] = device.makeBuffer(length: cap, options: .storageModeShared)
         return arr[index]
     }

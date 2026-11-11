@@ -28,11 +28,38 @@ final class Overlay: NSObject {
     private var mesh: [Vertex] = []
     private var buffers = FrameBuffers()
     private var renderScale: CGFloat = 0
+    /// Drawable size for the current render scale (kept while the GPU memory is released).
+    private var drawableSize: CGSize = .zero
+    /// Drawables and vertex buffers were given back while nothing can be shown.
+    private var released = false
     /// The effects are hidden: window ordered out, no frames.
     private(set) var hidden = false
     /// Screen asleep or locked: no frames, but the window stays.
-    var suspended = false { didSet { if suspended { sleep() } } }
+    var suspended = false {
+        didSet {
+            guard suspended != oldValue else { return }
+            if suspended {
+                sleep()
+                releaseGPUMemory()
+            } else if !hidden {
+                restoreGPUMemory()
+                wake()                  // redraw the kept state (paused drifts would otherwise stay blank)
+            }
+        }
+    }
+    /// The user's frame rate – the maximum. Ambient snowfall runs at `ambientFPS` (see `tick`).
     var fps = 60 { didSet { if fps != oldValue { applyRate() } } }
+    /// Draw calm snowfall at the lower ambient rate (an option – off by default, the snow then always
+    /// falls at `fps`).
+    var calmAtLowerRate = false
+    /// Rate for plain snowfall, faded full-screen snow and twinkling lights. Divides 60 and 120 Hz evenly.
+    static let ambientFPS = 30
+    /// How long the simulation must report "nothing fast" before the rate drops (a splash must not flip it twice).
+    private static let lowerAfter: CFTimeInterval = 0.75
+    /// Running at `fps` (true) or at `min(fps, ambientFPS)`.
+    private var fullRate = true
+    /// When the simulation started to report that nothing fast is on screen (0 = it currently does).
+    private var calmSince: CFTimeInterval = 0
 
     static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
@@ -75,8 +102,29 @@ final class Overlay: NSObject {
     }
 
     private func applyRate() {
-        let maxRate = Float(fps)
-        link?.preferredFrameRateRange = CAFrameRateRange(minimum: min(24, maxRate), maximum: maxRate, preferred: maxRate)
+        if fullRate || fps <= Self.ambientFPS {
+            let maxRate = Float(fps)
+            link?.preferredFrameRateRange = CAFrameRateRange(minimum: min(24, maxRate), maximum: maxRate, preferred: maxRate)
+        } else {
+            let r = Float(Self.ambientFPS)
+            link?.preferredFrameRateRange = CAFrameRateRange(minimum: r, maximum: r, preferred: r)
+        }
+    }
+
+    /// Full rate while something fast is on screen; the ambient rate once it has been calm for a moment.
+    /// Raises at once, lowers only after `lowerAfter`.
+    private func updateRate(now: CFTimeInterval) {
+        // Over a full-screen app only faded snow is drawn – never worth more than the ambient rate.
+        let fast = (sim.wantsFullFrameRate || !calmAtLowerRate) && !sim.isFullscreenPaused
+        if fast {
+            calmSince = 0
+        } else if calmSince == 0 {
+            calmSince = now
+        }
+        let full = fast || now - calmSince < Self.lowerAfter
+        guard full != fullRate else { return }
+        fullRate = full
+        if fps > Self.ambientFPS { applyRate() }
     }
 
     /// Drawable resolution: 1 pixel per point (cheap) or the screen's backing scale (Retina).
@@ -85,9 +133,31 @@ final class Overlay: NSObject {
         renderScale = scale
         view.renderScale = scale
         view.metalLayer.contentsScale = scale
-        view.metalLayer.drawableSize = CGSize(width: (sim.size.width * scale).rounded(),
-                                              height: (sim.size.height * scale).rounded())
+        drawableSize = CGSize(width: (sim.size.width * scale).rounded(), height: (sim.size.height * scale).rounded())
+        if !released { view.metalLayer.drawableSize = drawableSize }
         wake()
+    }
+
+    /// Nothing can be shown (hidden, display asleep, locked): give back the drawables and vertex buffers.
+    /// Not for a merely sleeping link – paused snow with visible drifts needs its last frame.
+    private func releaseGPUMemory() {
+        guard !released else { return }
+        released = true
+        particles = []
+        mesh = []
+        view.metalLayer.drawableSize = CGSize(width: 1, height: 1)
+        // Shrinking the size alone keeps the full-size drawables alive: replace them by empty 1×1 frames
+        // (the layer holds on to the previous one until a second frame follows).
+        for _ in 0..<2 {
+            renderer.draw(layer: view.metalLayer, size: view.bounds.size, particles: [], mesh: [], buffers: &buffers)
+        }
+        buffers = FrameBuffers()
+    }
+
+    private func restoreGPUMemory() {
+        guard released else { return }
+        released = false
+        view.metalLayer.drawableSize = drawableSize
     }
 
     /// Keep the snow out of screenshots and screen sharing.
@@ -102,8 +172,10 @@ final class Overlay: NSObject {
         hidden = on
         if on {
             sleep()
+            releaseGPUMemory()          // while still ordered in, so the empty frame is taken
             window.orderOut(nil)
         } else {
+            if !suspended { restoreGPUMemory() }
             window.orderFrontRegardless()
             wake()                      // draw at least one frame with the kept state
         }
@@ -134,12 +206,14 @@ final class Overlay: NSObject {
         let mods = NSEvent.modifierFlags
         let shovel = mods.contains(.option)
         sim.step(dt: dt, now: CACurrentMediaTime(), mouse: inside ? local : nil, shovel: shovel)
+        updateRate(now: now)
         particles.removeAll(keepingCapacity: true)
         mesh.removeAll(keepingCapacity: true)
         sim.buildParticles(into: &particles)
         sim.buildMesh(into: &mesh)
-        let t = Settings.shared.config.tint
-        renderer.tint = SIMD3(Float(t[safe: 0] ?? 1), Float(t[safe: 1] ?? 1), Float(t[safe: 2] ?? 1))
+        // The tint the simulation was synced with (`buildMesh` publishes it) – no settings read per frame.
+        let t = Mesh.tint
+        renderer.tint = SIMD3(t.0, t.1, t.2)
         renderer.draw(layer: view.metalLayer, size: view.bounds.size, particles: particles, mesh: mesh, buffers: &buffers)
         if !sim.isAnimating || hidden || suspended { link.isPaused = true }
     }

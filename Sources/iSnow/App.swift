@@ -96,14 +96,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var renderer: Renderer?
     private var overlays: [Overlay] = []
     private var panels: [SnowmanPanel] = []
+    /// The only repeating timer: window polls, and from there the Dock probe and the power backup.
+    /// While the effects are hidden it is a one-shot timer for the end of the hide period.
     private var pollTimer: Timer?
-    private var axTimer: Timer?
     private var screenTimer: Timer?
     private var observers: [NSObjectProtocol] = []
-    private var axTick = 0
+    private var mouseMonitor: Any?
     private var settingsWindow: NSWindow?
     private var settingsHost: NSHostingController<AnyView>?
     private var settingsGeneration = 0
+    private var settingsCloseObserver: NSObjectProtocol?
+    private var settingsRelease: DispatchWorkItem?
     private var onBattery = false
     private var lastDock: CGRect?
     /// For the IOKit power-source callback, which cannot capture anything.
@@ -137,14 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onChange = { [weak self] in self?.settingsChanged() }
         startPowerMonitor()
         tracker.refreshWindows()
-        rebuildOverlays()
-
-        setPollInterval(Self.idlePoll)
-        let ax = Timer(timeInterval: 1.0, repeats: true) { _ in MainActor.assumeIsolated { self.axTimerFired() } }
-        ax.tolerance = 0.2
-        RunLoop.main.add(ax, forMode: .common)
-        axTimer = ax
-        refreshAX()
+        rebuildOverlays()           // polls once – which also starts the poll timer and the first Dock probe
 
         let nc = NotificationCenter.default
         let ws = NSWorkspace.shared.notificationCenter
@@ -153,8 +149,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self.scheduleRebuild() }
         })
         observers.append(nc.addObserver(forName: Notification.Name.NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { self.refreshPower(); self.poll() }     // Low Power Mode → 30 fps
+            MainActor.assumeIsolated { self.refreshPower(pollAfter: false); self.poll(fresh: false) }   // Low Power Mode → 30 fps
         })
+        // A newly frontmost app is the common change that comes without the mouse (⌘-Tab, Dock, launch).
+        // Polled on the next run-loop turn so the tracker's own observers have seen it first.
+        observers.append(ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.poll() } }
+        })
+        // Launching or quitting an app changes the Dock: probe it every second again for a while.
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            observers.append(ws.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { self.dockMayChange() }
+            })
+        }
+        // A sleeping Mac does not advance timers: re-arm them (e.g. the end of Hide Effects) on wake.
+        observers.append(ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { self.poll() }
+        })
+        // A window drag cannot start without a button press: poll quicker as soon as one goes down,
+        // so the drift breaks off promptly although the static desktop is polled only 2.5× per second.
+        // (Mouse events need no permission for a global monitor; it never sees the event's contents.)
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { _ in
+            MainActor.assumeIsolated { self.mouseWentDown() }
+        }
         // Things that hide the desktop: display sleep, fast user switching, the lock screen, the screen saver.
         let pairs: [(Notification.Name, Notification.Name, String, Bool)] = [
             (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification, "sleep", false),
@@ -204,20 +221,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var suspendReasons: Set<String> = []
     private var suspended: Bool { !suspendReasons.isEmpty }
-    private static let slowPoll = 1.0           // paused, full screen, effects hidden
-    private static let idlePoll = 0.2           // 5× per second while windows sit still
-    private static let fastPoll = 1.0 / 30      // while a window is being dragged or the cursor is at a snowman
+    /// Interval of the repeating poll timer; 0 while there is none (hidden, suspended).
     private var pollInterval = 0.0
-    private var lastMotion = 0.0
+    private var lastMotion = -100.0            // a window last moved
+    private var lastChange = 0.0               // the tracker last reported a change
+    private var lastRevision: UInt64?
+    private var lastPanelRects: [CGRect?] = []
+    private var lastMetrics = -100.0
+    private var metricsDirty = true            // settings, screens or power changed: re-read the metrics now
+    private var nextAX = 0.0                   // when the next Dock / icon probe is due
+    private var axProbes = 0
+    private var axStable = 0                   // probes in a row that found the same Dock
+    private var axLastDock: CGRect?
+    private var nextPowerCheck = 0.0
 
     private func setPollInterval(_ t: Double) {
         guard t != pollInterval else { return }
         pollInterval = t
         pollTimer?.invalidate()
         let timer = Timer(timeInterval: t, repeats: true) { _ in MainActor.assumeIsolated { self.poll() } }
-        timer.tolerance = t * 0.1
+        timer.tolerance = PollSchedule.tolerance(for: t)
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
+    }
+
+    /// No repeating poll: nothing may wake the app while it is suspended or hidden.
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        pollInterval = 0
+    }
+
+    /// While hidden: a single wake-up when the hide period runs out (none for "until I turn it back on").
+    private func armHiddenTimer() {
+        stopPolling()
+        guard let until = state.hiddenUntil else { return }
+        let t = Timer(fire: until, interval: 0, repeats: false) { _ in MainActor.assumeIsolated { self.poll() } }
+        t.tolerance = 1
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
     }
 
     private func suspend(_ reason: String, _ on: Bool, clearAll: Bool = false) {
@@ -226,35 +268,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard suspended != was else { return }
         for o in overlays { o.suspended = suspended }
         if suspended {
-            pollTimer?.fireDate = .distantFuture
+            stopPolling()
         } else {
-            pollTimer?.fireDate = Date()
-            refreshPower()
-            poll()
+            metricsDirty = true
+            refreshPower(pollAfter: false)
+            poll()                      // restarts the timer (or the hide timer) and checks the hide period
         }
     }
 
-    private func poll() {
-        guard !suspended else { return }
+    /// A mouse button went down somewhere: a window drag may start – look more often until it is released.
+    private func mouseWentDown() {
+        guard !suspended, !state.hidden, pollInterval > PollSchedule.pressed,
+              !overlays.allSatisfy({ $0.sim.isFullscreenPaused }) else { return }
+        setPollInterval(PollSchedule.pressed)
+    }
+
+    /// An app launched or quit: its Dock tile appears or goes away.
+    private func dockMayChange() {
+        axStable = 0
+        nextAX = min(nextAX, CACurrentMediaTime() + 0.5)
+    }
+
+    /// Reads the windows (unless `fresh` is false – then only the settings are passed on), probes the Dock
+    /// when due, syncs every simulation and picks the next poll interval.
+    private func poll(fresh: Bool = true) {
+        guard !suspended else { stopPolling(); return }
         if state.hideExpired() { showEffects(); return }
-        guard !state.hidden else {
-            setPollInterval(Self.slowPoll)
-            return
-        }
-        tracker.refreshWindows()
+        guard !state.hidden else { armHiddenTimer(); return }
         let now = CACurrentMediaTime()
+        if now >= nextPowerCheck {
+            nextPowerCheck = now + PollSchedule.powerCheck
+            refreshPower(pollAfter: false)
+        }
+        let allFullscreen = !overlays.isEmpty && overlays.allSatisfy { $0.sim.isFullscreenPaused }
+        let wasAnimating = overlays.contains { $0.sim.isAnimating }
+        probeAXIfDue(now: now, animating: wasAnimating, allFullscreen: allFullscreen)
+        if fresh { tracker.refreshWindows() }
+        if tracker.revision != lastRevision {
+            lastRevision = tracker.revision
+            lastChange = now
+        }
         let cfg = effectiveConfig()
         if tracker.dockFrame != lastDock {
             lastDock = tracker.dockFrame
             assignSnowmanHost()
         }
-        let screens = screensByID()
-        applyDisplayOptions(screens)
+        // Menu bar auto-hide, Dock size and the notch can change without a screen notification – but
+        // not often: read them once a second, and at once when something says they changed.
+        let screens: [CGDirectDisplayID: NSScreen]?
+        if metricsDirty || now - lastMetrics >= PollSchedule.metricsEvery {
+            metricsDirty = false
+            lastMetrics = now
+            let s = screensByID()
+            applyDisplayOptions(s)
+            screens = s
+        } else {
+            screens = nil
+        }
         for o in overlays {
-            if let s = screens[o.screenID] {
+            if let s = screens?[o.screenID] {
                 o.sim.updateMetrics(screenFrame: s.frame, visibleFrame: s.visibleFrame, safeTop: s.safeAreaInsets.top)
             }
             o.fps = cfg.fps
+            o.calmAtLowerRate = cfg.calmLowerRate
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
                           icons: tracker.icons, widgets: tracker.widgets, dockEstimated: tracker.dockEstimated,
                           dockAvoid: tracker.dockAvoid,
@@ -268,29 +344,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let full = overlays.contains { $0.sim.isFullscreenPaused }
         if state.fullscreenPaused != full { state.fullscreenPaused = full }
-        updatePanel()
+        let rects = updatePanel()
+        // A snowman that is built, falls or lands moves its click target: keep up with it.
+        if Self.differ(rects, lastPanelRects) { lastPanelRects = rects; lastChange = now }
         // Follow a dragged window closely so the snow visibly slides off, then calm down again.
-        if overlays.contains(where: { $0.sim.windowMoving }) { lastMotion = now }
+        if overlays.contains(where: { $0.sim.windowMoving }) { lastMotion = now; lastChange = now }
         let mouse = NSEvent.mouseLocation
         let atSnowman = panels.contains { $0.isDragging || $0.contains(mouse, margin: 8) }
-        let animating = overlays.contains { $0.sim.isAnimating }
-        setPollInterval(now - lastMotion < 1.0 || atSnowman ? Self.fastPoll : animating ? Self.idlePoll : Self.slowPoll)
+        setPollInterval(PollSchedule.interval(
+            now: now, lastChange: lastChange, lastMotion: lastMotion,
+            buttonDown: NSEvent.pressedMouseButtons != 0, atSnowman: atSnowman,
+            animating: overlays.contains { $0.sim.isAnimating },
+            allFullscreen: !overlays.isEmpty && overlays.allSatisfy { $0.sim.isFullscreenPaused }))
     }
 
-    private func axTimerFired() {
-        guard !suspended, !state.hidden else { return }
-        axTick += 1
-        if axTick % 10 == 0 { refreshPower() }      // backup for the power-source notification
-        // Nothing moves (paused, full screen): the Dock and the icons are checked less often.
-        if !overlays.contains(where: { $0.sim.isAnimating }) && axTick % 5 != 0 { return }
+    /// The Dock (and every 4th time the desktop icons) via Accessibility, off the main thread: every
+    /// second, every 3 s while the Dock stays put, every 5 s while nothing animates, never while
+    /// full-screen apps cover every screen (neither the Dock nor the desktop is visible then).
+    /// The tracker calls back only when the Dock or the icons changed.
+    private func probeAXIfDue(now: Double, animating: Bool, allFullscreen: Bool) {
+        guard !allFullscreen, now >= nextAX else { return }
+        if tracker.dockFrame == axLastDock { axStable += 1 } else { axStable = 0; axLastDock = tracker.dockFrame }
+        // A little slack so a poll that fires a bit early (timer tolerance) doesn't skip a whole round.
+        nextAX = now + PollSchedule.axInterval(stableProbes: axStable, animating: animating,
+                                               trusted: settings.axTrusted) - 0.1
         refreshAX()
     }
 
     private func refreshAX() {
+        axProbes += 1
         let c = settings.config
-        // The Dock is checked every second; desktop icons barely move, so every 4 seconds.
-        tracker.refreshAX(wantDock: true, wantIcons: c.onIcons && axTick % 4 == 1) { [weak self] in
-            self?.poll()
+        // Desktop icons barely move: every 4th probe.
+        tracker.refreshAX(wantDock: true, wantIcons: c.onIcons && axProbes % 4 == 1) { [weak self] in
+            // Only called when the Dock or the icons changed.
+            guard let self else { return }
+            self.axStable = 0
+            self.poll()
         }
         noteAccessibilityGranted()
     }
@@ -330,6 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlays = next
         lastDock = tracker.dockFrame
         assignSnowmanHost()
+        metricsDirty = true
         poll()
     }
 
@@ -369,12 +459,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.batterySaverActive = onBattery && settings.config.batterySaver
     }
 
-    private func refreshPower() {
+    private func refreshPower(pollAfter: Bool = true) {
         onBattery = AppState.onBatteryPower()
         let saver = onBattery && settings.config.batterySaver
         guard saver != state.batterySaverActive else { return }
         state.batterySaverActive = saver
-        poll()
+        metricsDirty = true             // Retina rendering is off on battery
+        if pollAfter { poll(fresh: false) }
     }
 
     /// The settings as the simulations get them: lighter on battery and in Low Power Mode.
@@ -408,13 +499,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.hide(until: until)
         for o in overlays { o.setHidden(true) }
         updatePanel()
-        setPollInterval(Self.slowPoll)
+        armHiddenTimer()
     }
 
     func showEffects() {
         state.show()
         for o in overlays { o.setHidden(false) }
-        refreshPower()
+        metricsDirty = true
+        refreshPower(pollAfter: false)
         poll()
     }
 
@@ -422,7 +514,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var snowmanOverlay: Overlay? { overlays.first { $0.sim.hostsSnowman } }
 
-    private func updatePanel() {
+    /// Click targets that moved by more than 2 pt (or appeared, or went away).
+    private static func differ(_ a: [CGRect?], _ b: [CGRect?]) -> Bool {
+        guard a.count == b.count else { return true }
+        for (x, y) in zip(a, b) {
+            switch (x, y) {
+            case (nil, nil): continue
+            case let (x?, y?):
+                if abs(x.minX - y.minX) > 2 || abs(x.minY - y.minY) > 2 || abs(x.width - y.width) > 2
+                    || abs(x.height - y.height) > 2 { return true }
+            default: return true
+            }
+        }
+        return false
+    }
+
+    /// Positions the snowman panels; returns the snowmen's click targets (local coordinates).
+    @discardableResult
+    private func updatePanel() -> [CGRect?] {
         let rects = state.hidden || suspended ? [] : snowmanOverlay?.sim.snowmanHitRects ?? []
         while panels.count < rects.count {
             let i = panels.count
@@ -436,11 +545,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         while panels.count > rects.count { panels.removeLast().close() }
         guard let o = snowmanOverlay, settings.config.snowman else {
             panels.forEach { $0.update(nil) }
-            return
+            return rects
         }
         for (i, r) in rects.enumerated() {
             panels[i].update(r.map { $0.offsetBy(dx: o.sim.origin.x, dy: o.sim.origin.y) })
         }
+        return rects
     }
 
     /// Runs `body` with the overlay that hosts the snowmen and a global→local point converter.
@@ -459,7 +569,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if state.batterySaverActive != (onBattery && settings.config.batterySaver) {
             state.batterySaverActive = onBattery && settings.config.batterySaver
         }
-        poll()
+        // The windows are as they were: only pass the new settings on (sliders send many changes).
+        metricsDirty = true
+        poll(fresh: false)
         for o in overlays { o.wake() }
     }
 
@@ -493,6 +605,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Opens the settings (or brings them to the front) on the given tab.
     func showSettings(tab: Int = 0) {
         settings.refreshLoginStatus()       // the user may have changed it in System Settings
+        settingsRelease?.cancel()           // reopened right after closing: keep the window
+        settingsRelease = nil
         let window: NSWindow
         if let w = settingsWindow, let host = settingsHost {
             window = w
@@ -517,10 +631,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow = w
             settingsHost = host
             window = w
+            settingsCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
+                MainActor.assumeIsolated { self.settingsWillClose() }
+            }
         }
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+    }
+
+    /// A closed settings window keeps its whole SwiftUI hierarchy (five tabs of forms, ≈ 10–20 MB) –
+    /// free it shortly after closing. Opening the settings again builds a fresh one.
+    private func settingsWillClose() {
+        settingsRelease?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.releaseSettingsWindow() }
+        }
+        settingsRelease = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func releaseSettingsWindow() {
+        settingsRelease = nil
+        guard let w = settingsWindow, !w.isVisible else { return }
+        // The color panel of the snow-color picker would stay bound to the released view.
+        if NSColorPanel.sharedColorPanelExists, NSColorPanel.shared.isVisible { NSColorPanel.shared.close() }
+        if let o = settingsCloseObserver { NotificationCenter.default.removeObserver(o) }
+        settingsCloseObserver = nil
+        w.contentViewController = nil
+        settingsHost = nil
+        settingsWindow = nil
     }
 
     private func settingsRoot(tab: Int) -> AnyView {

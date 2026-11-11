@@ -344,6 +344,7 @@ private struct ExtrasTab: View {
                     Text("60 fps").tag(60)
                     Text("120 fps (ProMotion)").tag(120)
                 }
+                Toggle("Draw calm snowfall at 30 fps (saves power)", isOn: $settings.config.calmLowerRate)
                 Text("Low Power Mode always caps the frame rate at 30 fps. When nothing is falling, rendering stops.")
                     .font(.callout).foregroundStyle(.secondary)
                 Toggle("Sharp Retina rendering (uses more power)", isOn: $settings.config.retina)

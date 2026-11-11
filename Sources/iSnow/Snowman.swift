@@ -108,11 +108,15 @@ struct Snowman {
         return CGRect(x: CGFloat(anchorX - r0 - 6), y: CGFloat(baseY), width: CGFloat(r0 * 2 + 12), height: CGFloat(top - baseY))
     }
 
+    /// Something about it is animating (the renderer then runs at the full frame rate). A snowman that
+    /// just stands, its eyes following the cursor, is not moving.
     var isMoving: Bool {
         if carried || falling { return true }
         switch phase {
         case .rolling, .dressing, .collapsing, .melting: return true
-        default: return wobble > 0.01 || wave > 0 || armThrow > 0.01 || !loose.isEmpty || carrot != nil
+        // `wave` only counts down while standing – a wave cut short by a collapse stays frozen.
+        case .standing: return wobble > 0.01 || wave > 0 || armThrow > 0.01 || !loose.isEmpty || carrot != nil
+        case .absent: return wobble > 0.01 || armThrow > 0.01 || !loose.isEmpty || carrot != nil
         }
     }
 

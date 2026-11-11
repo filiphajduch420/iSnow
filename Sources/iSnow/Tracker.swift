@@ -3,7 +3,7 @@ import ApplicationServices
 import Darwin
 
 /// Another app's window in global Cocoa coordinates (origin at the main screen's bottom left).
-struct TrackedWindow: Sendable {
+struct TrackedWindow: Sendable, Equatable {
     let id: Int
     let frame: CGRect
 }
@@ -19,6 +19,10 @@ final class Tracker {
     private(set) var icons: [CGRect] = []
     private(set) var widgets: [TrackedWindow] = []     // desktop widgets (WidgetKit, macOS 14+)
     private(set) var menuBars: [CGRect] = []           // visible menu bars (hidden in full-screen spaces)
+    /// Incremented whenever a refresh produced different windows, occluders, widgets, menu bars,
+    /// active window, Dock window visibility, Dock frame (or its avoid area / estimated flag) or icons
+    /// than the one before. Unchanged refreshes leave it alone.
+    private(set) var revision: UInt64 = 0
     /// Front-most layer-0 window of the frontmost regular app; nil if it has none or iSnow is frontmost.
     private(set) var activeWindow: CGRect?
     /// Whether the Dock's own window is in the on-screen list. It is missing in a full-screen Space
@@ -34,21 +38,36 @@ final class Tracker {
     private static let mainMenuLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
     private static let statusLevel = Int(CGWindowLevelForKey(.statusWindow))
 
-    // Cached process information, refreshed on app launch/terminate/hide/unhide or every `appsMaxAge` seconds
-    // (activation policies can change at run time).
-    private var regularPIDs = Set<pid_t>()
+    // Process information. Asking LaunchServices about every running app is a synchronous XPC call per app
+    // (130 apps ≈ 30–55 ms), so apps are classified lazily, one pid at a time, the first time a pid owns a
+    // layer-0 window. A pid is forgotten when its app launches (pid reuse), quits or activates; pids that
+    // own windows are re-checked every `recheckInterval` (activation policies can change at run time).
+    private var regularByPID: [pid_t: Bool] = [:]
+    private var recheckTime: CFAbsoluteTime = 0
+    private static let recheckInterval: CFAbsoluteTime = 5
     private var widgetHostPID: pid_t?              // com.apple.notificationcenterui
     private var dockPID: pid_t?                    // com.apple.dock
-    private var appsTime: CFAbsoluteTime = 0
-    private var appsDirty = true
-    private static let appsMaxAge: CFAbsoluteTime = 2
+    private var frontPID: pid_t?                   // frontmost app, from the activation notification
     private var windowServerPID: pid_t?
     private var notWindowServer = Set<pid_t>()
+    private var primaryH: CGFloat                  // `primaryHeight`, cached until the screens change
 
-    // The Dock estimate (no Accessibility) is computed off the main thread and cached.
+    // Accessibility trust: `AXIsProcessTrusted()` costs ≈ 0.6 ms on the main thread. While trusted it is
+    // re-checked every `trustInterval`; while not trusted on every probe (≈ 1 s), so a grant is noticed quickly.
+    private var trustTime: CFAbsoluteTime = 0
+    private static let trustInterval: CFAbsoluteTime = 5
+    private static var trustCheckDue = false
+
+    // The Dock estimate (no Accessibility) is computed off the main thread and cached. A full estimate
+    // (running apps, minimized windows) is made after an app launched/quit/hid or the screens changed, and
+    // otherwise at most every `estimateRescan` seconds – only while the Dock frame does not come from
+    // Accessibility. The cheap `autohide` flag is re-read every `autohideMaxAge` seconds in every case.
     private static var estimate: DockEstimate?
     private static var estimateTime: CFAbsoluteTime = 0
     private static let estimateMaxAge: CFAbsoluteTime = 10
+    private static let estimateRescan: CFAbsoluteTime = 30
+    private var autohideTime: CFAbsoluteTime = 0
+    private static let autohideMaxAge: CFAbsoluteTime = 10
     private var estimateDirty = true
     private var estimating = false
     private static let estimateQueue = DispatchQueue(label: "iSnow.dock-estimate", qos: .utility)
@@ -59,43 +78,98 @@ final class Tracker {
     static var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
 
     init() {
+        primaryH = Self.primaryHeight
+        frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        resolveSystemPIDs()
         let ws = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
-                     NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
+        observers.append(ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let launched = app?.processIdentifier
+            let bundleID = app?.bundleIdentifier
+            MainActor.assumeIsolated { self?.appLaunched(launched, bundleID: bundleID) }
+        })
+        observers.append(ws.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let gone = Self.pid(note)
+            MainActor.assumeIsolated { self?.appTerminated(gone) }
+        })
+        for name in [NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
             observers.append(ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.appsChanged() }
+                MainActor.assumeIsolated { self?.estimateDirty = true }
             })
         }
+        observers.append(ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let active = Self.pid(note)
+            MainActor.assumeIsolated { self?.appActivated(active) }
+        })
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.estimateDirty = true }
+            MainActor.assumeIsolated {
+                self?.estimateDirty = true
+                self?.primaryH = Self.primaryHeight
+            }
         })
     }
 
-    private func appsChanged() {
-        appsDirty = true
-        estimateDirty = true
+    private nonisolated static func pid(_ note: Notification) -> pid_t? {
+        (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
     }
 
-    private func refreshAppsIfNeeded() {
-        let now = CFAbsoluteTimeGetCurrent()
-        guard appsDirty || now - appsTime > Self.appsMaxAge else { return }
-        appsDirty = false
-        appsTime = now
-        var regular = Set<pid_t>()
-        var widgetHost: pid_t?
-        var dock: pid_t?
-        for a in NSWorkspace.shared.runningApplications {
-            if a.activationPolicy == .regular { regular.insert(a.processIdentifier) }
-            switch a.bundleIdentifier {
-            case "com.apple.notificationcenterui": widgetHost = a.processIdentifier
-            case "com.apple.dock": dock = a.processIdentifier
-            default: break
-            }
+    private func appLaunched(_ pid: pid_t?, bundleID: String?) {
+        estimateDirty = true
+        guard let pid else { return }
+        regularByPID[pid] = nil                     // a reused pid: classify again when it shows a window
+        switch bundleID {
+        case "com.apple.notificationcenterui": widgetHostPID = pid
+        case "com.apple.dock": dockPID = pid
+        default: break
         }
-        regularPIDs = regular
-        widgetHostPID = widgetHost
-        dockPID = dock
+    }
+
+    private func appTerminated(_ pid: pid_t?) {
+        estimateDirty = true
+        guard let pid else { return }
+        regularByPID[pid] = nil
+        if pid == dockPID { dockPID = nil }
+        if pid == widgetHostPID { widgetHostPID = nil }
+        if pid == frontPID { frontPID = nil }        // the next activation sets it again
+    }
+
+    private func appActivated(_ pid: pid_t?) {
+        frontPID = pid
+        // Apps often switch to a regular policy when they come to the front: classify this one again.
+        if let pid { regularByPID[pid] = nil }
+    }
+
+    /// Whether `pid` belongs to a regular app (one with a Dock icon). One LaunchServices lookup per new pid.
+    private func isRegular(_ pid: pid_t, recheck: Bool, rechecked: inout Set<pid_t>) -> Bool {
+        if let known = regularByPID[pid], !recheck || rechecked.contains(pid) { return known }
+        let regular = NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular
+        regularByPID[pid] = regular
+        if recheck { rechecked.insert(pid) }
+        return regular
+    }
+
+    /// Every `recheckInterval`: forget processes that are gone and find the Dock / Notification Center again
+    /// if they were restarted (`kill(pid, 0)` is a cheap existence check).
+    private func recheckProcesses() {
+        regularByPID = regularByPID.filter { Self.alive($0.key) }
+        if let p = dockPID, !Self.alive(p) { dockPID = nil }
+        if let p = widgetHostPID, !Self.alive(p) { widgetHostPID = nil }
+        if dockPID == nil || widgetHostPID == nil { resolveSystemPIDs() }
+    }
+
+    private func resolveSystemPIDs() {
+        if dockPID == nil {
+            dockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        }
+        if widgetHostPID == nil {
+            widgetHostPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui")
+                .first?.processIdentifier
+        }
+    }
+
+    private nonisolated static func alive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
     /// The window server's own windows (menu bar backdrop, cursor…) are not occluders. Found by process
@@ -122,40 +196,74 @@ final class Tracker {
         }
     }
 
+    // Window-list entries are read straight from the CFDictionary – bridging the list to
+    // `[[String: Any]]` costs about a quarter of the whole refresh.
+    private nonisolated static func value(_ d: CFDictionary, _ key: CFString) -> CFTypeRef? {
+        guard let v = CFDictionaryGetValue(d, Unmanaged.passUnretained(key).toOpaque()) else { return nil }
+        return Unmanaged<CFTypeRef>.fromOpaque(v).takeUnretainedValue()
+    }
+
+    private nonisolated static func int(_ d: CFDictionary, _ key: CFString) -> Int? {
+        guard let v = value(d, key), CFGetTypeID(v) == CFNumberGetTypeID() else { return nil }
+        var out = 0
+        guard CFNumberGetValue(unsafeDowncast(v, to: CFNumber.self), .longType, &out) else { return nil }
+        return out
+    }
+
+    private nonisolated static func double(_ d: CFDictionary, _ key: CFString) -> Double? {
+        guard let v = value(d, key), CFGetTypeID(v) == CFNumberGetTypeID() else { return nil }
+        var out = 0.0
+        CFNumberGetValue(unsafeDowncast(v, to: CFNumber.self), .doubleType, &out)
+        return out
+    }
+
+    private nonisolated static func rect(_ d: CFDictionary, _ key: CFString) -> CGRect? {
+        guard let v = value(d, key), CFGetTypeID(v) == CFDictionaryGetTypeID() else { return nil }
+        return CGRect(dictionaryRepresentation: unsafeDowncast(v, to: CFDictionary.self))
+    }
+
     /// Cheap window query (CGWindowList, no permission needed), called ~5× per second.
     /// Also finds desktop widgets and the active window.
     func refreshWindows() {
-        refreshAppsIfNeeded()
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return }
-        let h = Self.primaryHeight
-        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let frontPID = front == ownPID ? nil : front
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        let recheck = now - recheckTime >= Self.recheckInterval
+        if recheck {
+            recheckTime = now
+            recheckProcesses()
+        }
+        var rechecked = Set<pid_t>()
+        let h = primaryH
+        let frontPID = frontPID == ownPID ? nil : frontPID
+        let count = CFArrayGetCount(list)
         var ws: [TrackedWindow] = []
         var occ: [CGRect] = []
         var wid: [TrackedWindow] = []
         var bars: [CGRect] = []
         var active: CGRect?
         var dockSeen = false
-        ws.reserveCapacity(list.count)
-        for d in list {
-            guard let pid = d[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
-                  let layer = d[kCGWindowLayer as String] as? Int,
-                  let raw = d[kCGWindowBounds as String],
-                  let b = CGRect(dictionaryRepresentation: raw as! CFDictionary) else { continue }
-            if (d[kCGWindowAlpha as String] as? Double ?? 1) < 0.05 { continue }
+        ws.reserveCapacity(count)
+        for i in 0..<count {
+            guard let item = CFArrayGetValueAtIndex(list, i) else { continue }
+            let d = Unmanaged<CFDictionary>.fromOpaque(item).takeUnretainedValue()
+            guard let ownerPID = Self.int(d, kCGWindowOwnerPID), let pid = pid_t(exactly: ownerPID), pid != ownPID,
+                  let layer = Self.int(d, kCGWindowLayer),
+                  let b = Self.rect(d, kCGWindowBounds) else { continue }
+            if (Self.double(d, kCGWindowAlpha) ?? 1) < 0.05 { continue }
             let r = CGRect(x: b.minX, y: h - b.maxY, width: b.width, height: b.height)
             if layer < 0 {
                 // Desktop widgets live in Notification Center's desktop-level windows. The window is
                 // the widget's grid cell; the visible widget is inset by about 11 points.
                 if let widgetHostPID, pid == widgetHostPID,
                    b.width >= 100, b.height >= 100, b.width < 1000,
-                   let id = d[kCGWindowNumber as String] as? Int {
+                   let id = Self.int(d, kCGWindowNumber) {
                     wid.append(TrackedWindow(id: id, frame: r.insetBy(dx: 11, dy: 11)))
                 }
             } else if layer == 0 {
                 // Only regular apps: accessory apps keep invisible helper windows (annotation, dimmers…).
-                guard regularPIDs.contains(pid), b.width >= 60, b.height >= 40,
-                      let id = d[kCGWindowNumber as String] as? Int else { continue }
+                guard b.width >= 60, b.height >= 40,
+                      isRegular(pid, recheck: recheck, rechecked: &rechecked),
+                      let id = Self.int(d, kCGWindowNumber) else { continue }
                 ws.append(TrackedWindow(id: id, frame: r))
                 if active == nil, pid == frontPID { active = r }
             } else if layer == Self.mainMenuLevel || layer == Self.statusLevel {
@@ -166,33 +274,38 @@ final class Tracker {
                 occ.append(r)
             }
         }
-        windows = ws
-        overlayOccluders = occ
-        widgets = wid
-        menuBars = bars
-        activeWindow = active
-        dockWindowOnScreen = dockSeen
+        if ws != windows || occ != overlayOccluders || wid != widgets || bars != menuBars
+            || active != activeWindow || dockSeen != dockWindowOnScreen {
+            windows = ws
+            overlayOccluders = occ
+            widgets = wid
+            menuBars = bars
+            activeWindow = active
+            dockWindowOnScreen = dockSeen
+            revision &+= 1
+        }
     }
 
     // MARK: Dock and desktop icons
 
     /// Dock and desktop icons via Accessibility – on a serial background queue, about once per second.
     /// `wantDock: false` leaves the Dock values as they are (except when the Dock auto-hides).
+    /// `done` runs on the main thread after the probe, and only if the Dock frame, its avoid area, the
+    /// estimated flag or the icons actually changed.
     func refreshAX(wantDock: Bool, wantIcons: Bool, done: @escaping @MainActor () -> Void) {
-        let trusted = AXIsProcessTrusted()
-        if Settings.shared.axTrusted != trusted { Settings.shared.axTrusted = trusted }
+        let trusted = checkTrust()
         refreshEstimateIfNeeded()
         let autohide = Self.estimate?.autohide ?? false
         if autohide { applyEstimate() }               // clears the Dock
         guard trusted else {
             applyEstimate()
-            if !icons.isEmpty { icons = [] }
+            setIcons([])
             return
         }
         let probeDock = wantDock && !autohide
         guard probeDock || wantIcons, !axBusy else { return }
         axBusy = true
-        let h = Self.primaryHeight
+        let h = primaryH
         AXProbe.queue.async {
             let deadline = CFAbsoluteTimeGetCurrent() + AXProbe.budget
             AXProbe.configure()
@@ -201,12 +314,25 @@ final class Tracker {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.axBusy = false
+                    let before = self.revision
                     if let dock { self.applyAXDock(dock) }
-                    if case .found(let list)? = icons { self.icons = list }
-                    done()
+                    if case .found(let list)? = icons { self.setIcons(list) }
+                    if self.revision != before { done() }
                 }
             }
         }
+    }
+
+    /// `AXIsProcessTrusted()`, rate-limited while trusted (see `trustInterval`); updates `Settings.axTrusted`.
+    private func checkTrust() -> Bool {
+        let settings = Settings.shared
+        let now = CFAbsoluteTimeGetCurrent()
+        if settings.axTrusted && !Self.trustCheckDue && now - trustTime < Self.trustInterval { return true }
+        Self.trustCheckDue = false
+        trustTime = now
+        let trusted = AXIsProcessTrusted()
+        if settings.axTrusted != trusted { settings.axTrusted = trusted }
+        return trusted
     }
 
     private func applyAXDock(_ r: AXProbe.Result<CGRect>) {
@@ -233,22 +359,49 @@ final class Tracker {
     }
 
     private func setDock(_ frame: CGRect?, avoid: CGRect?, estimated: Bool) {
-        if dockFrame != frame { dockFrame = frame }
-        if dockAvoid != avoid { dockAvoid = avoid }
-        if dockEstimated != estimated { dockEstimated = estimated }
+        guard dockFrame != frame || dockAvoid != avoid || dockEstimated != estimated else { return }
+        dockFrame = frame
+        dockAvoid = avoid
+        dockEstimated = estimated
+        revision &+= 1
     }
 
-    /// Recomputes the estimate in the background every `estimateMaxAge` seconds, or sooner after an app
-    /// launched or quit or the screens changed.
+    private func setIcons(_ list: [CGRect]) {
+        guard icons != list else { return }
+        icons = list
+        revision &+= 1
+    }
+
+    /// Keeps the estimate fresh without blocking the main thread: a full estimate in the background when
+    /// needed (see `estimateRescan`), otherwise only the `autohide` flag every `autohideMaxAge` seconds.
     private func refreshEstimateIfNeeded() {
-        guard !estimating,
-              estimateDirty || Self.estimate == nil
-                || CFAbsoluteTimeGetCurrent() - Self.estimateTime > Self.estimateMaxAge else { return }
+        guard !estimating else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        if Self.estimate == nil || (!dockFromAX && (estimateDirty || now - Self.estimateTime > Self.estimateRescan)) {
+            computeEstimate()
+        } else if now - autohideTime > Self.autohideMaxAge {
+            estimating = true
+            autohideTime = now
+            Self.estimateQueue.async {
+                let autohide = DockEstimator.autohide()
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self.estimating = false
+                        // The Dock's preferences changed (rare): estimate everything again.
+                        if autohide != Self.estimate?.autohide { self.computeEstimate() }
+                    }
+                }
+            }
+        }
+    }
+
+    private func computeEstimate() {
         estimating = true
         estimateDirty = false
-        let input = Self.estimateInput()
+        autohideTime = CFAbsoluteTimeGetCurrent()
+        let screens = Self.estimateScreens()
         Self.estimateQueue.async {
-            let e = DockEstimator.compute(input)
+            let e = DockEstimator.compute(DockEstimator.Input(screens: screens, apps: DockEstimator.regularApps()))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     Self.store(e)
@@ -264,19 +417,14 @@ final class Tracker {
         estimateTime = CFAbsoluteTimeGetCurrent()
     }
 
-    /// Screens and regular apps, gathered on the main thread for the background estimate.
-    private static func estimateInput() -> DockEstimator.Input {
-        let screens = NSScreen.screens.map { DockEstimator.Screen(frame: $0.frame, visible: $0.visibleFrame) }
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.map {
-            DockEstimator.App(pid: $0.processIdentifier, bundleID: $0.bundleIdentifier, hidden: $0.isHidden)
-        }
-        return DockEstimator.Input(screens: screens, apps: apps)
+    private static func estimateScreens() -> [DockEstimator.Screen] {
+        NSScreen.screens.map { DockEstimator.Screen(frame: $0.frame, visible: $0.visibleFrame) }
     }
 
     /// The cached estimate, or a fresh one computed right here when there is none (e.g. `--print-dock`).
     private static func currentEstimate() -> DockEstimate {
         if let e = estimate, CFAbsoluteTimeGetCurrent() - estimateTime <= estimateMaxAge { return e }
-        let e = DockEstimator.compute(estimateInput())
+        let e = DockEstimator.compute(DockEstimator.Input(screens: estimateScreens(), apps: DockEstimator.regularApps()))
         store(e)
         return e
     }
@@ -299,6 +447,7 @@ final class Tracker {
     static func requestAccessibility() {
         let key = "AXTrustedCheckOptionPrompt" as CFString
         _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        trustCheckDue = true                        // check again on the next probe, also while trusted
     }
 }
 
@@ -310,7 +459,7 @@ struct DockEstimate: Sendable {
 }
 
 /// Estimates the Dock's frame from its preferences, the running apps and the window list.
-/// Runs off the main thread; touches only Sendable inputs, `UserDefaults` and `CGWindowList`.
+/// Runs off the main thread; touches only Sendable inputs, `UserDefaults`, `CGWindowList` and the running-app list.
 enum DockEstimator {
     struct Screen: Sendable { let frame: CGRect; let visible: CGRect }
     struct App: Sendable { let pid: pid_t; let bundleID: String?; let hidden: Bool }
@@ -319,6 +468,19 @@ enum DockEstimator {
     /// Dock height ≈ tile size + 20 pt (measured: tilesize 34 → 54 pt inset).
     static let dockPadding: CGFloat = 20
     static let maxMinimized = 4
+
+    /// Regular apps (Dock tiles). `runningApplications` and `NSRunningApplication` are thread safe; this asks
+    /// LaunchServices once per running app (tens of ms), so it runs on the estimate queue, not the main thread.
+    nonisolated static func regularApps() -> [App] {
+        NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.map {
+            App(pid: $0.processIdentifier, bundleID: $0.bundleIdentifier, hidden: $0.isHidden)
+        }
+    }
+
+    /// Whether the Dock hides automatically (its preferences only, no app scan).
+    nonisolated static func autohide() -> Bool {
+        UserDefaults(suiteName: "com.apple.dock")?.bool(forKey: "autohide") ?? false
+    }
 
     nonisolated static func compute(_ input: Input) -> DockEstimate {
         let d = UserDefaults(suiteName: "com.apple.dock")

@@ -14,17 +14,17 @@ enum Intensity: Int, CaseIterable, Identifiable, Sendable {
         case .storm: String(localized: "Snowstorm")
         }
     }
-    var density: Double { [0.35, 1.0, 3.2, 6.5][rawValue] }
-    var maxFlakes: Double { [250, 700, 2000, 4000][rawValue] }
+    var density: Double { [0.45, 1.25, 4.0, 8.1][rawValue] }
+    var maxFlakes: Double { [310, 875, 2500, 5000][rawValue] }
     var wind: Double { [0.6, 1.0, 1.6, 2.6][rawValue] }
 }
 
 /// All simulation settings. Stored as JSON; missing keys fall back to defaults.
 struct SimConfig: Codable, Equatable, Sendable {
     // Snowfall
-    var density: Double = 1.0          // multiple of 28 flakes/s per 1000 pt of width
-    var maxFlakes: Double = 700
-    var flakeSize: Double = 1.0
+    var density: Double = 1.25         // multiple of 28 flakes/s per 1000 pt of width
+    var maxFlakes: Double = 875
+    var flakeSize: Double = 1.25
     var fallSpeed: Double = 1.0
     var wind: Double = 1.0
     var sparkle: Bool = false
@@ -81,6 +81,7 @@ struct SimConfig: Codable, Equatable, Sendable {
     var retina = false                 // render at the screen's full Retina resolution (costs battery)
     var hideFromCapture = false        // keep the snow out of screenshots and screen sharing
     var fps: Int = 60
+    var calmLowerRate = false          // draw calm snowfall at 30 fps (saves power)
     // Runtime only (not persisted)
     var paused = false
 
@@ -89,7 +90,7 @@ struct SimConfig: Codable, Equatable, Sendable {
              unlimitedDrifts, windowDepth, groundDepth, accumulation, temperature, windowFrost, icicles, icicleLength, snowman,
              snowmanSize, snowmanCount, snowmanGhost,
              snowmanBreak, snowballs, throwEvery, christmas, christmasTree, christmasGarland, christmasHats, lightStyle,
-             treeSize, lightSize, lightGlow, santa, skier, skierEvery, skierInterval, skierCount, snowplow, autoPlow, autoPlowEvery, autoPlowHeight, lightsWhilePaused, calmActive, fahrenheit, batterySaver, retina, hideFromCapture, mouse, frost, pauseFullscreen, fullscreenSnow, fps
+             treeSize, lightSize, lightGlow, santa, skier, skierEvery, skierInterval, skierCount, snowplow, autoPlow, autoPlowEvery, autoPlowHeight, lightsWhilePaused, calmActive, fahrenheit, batterySaver, retina, hideFromCapture, mouse, frost, pauseFullscreen, fullscreenSnow, fps, calmLowerRate
     }
 
     var preset: Intensity? {
