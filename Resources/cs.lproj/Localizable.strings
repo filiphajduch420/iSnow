@@ -54,6 +54,10 @@
 "%lld min" = "%lld min";
 "Build Now" = "Postavit hned";
 "Snowball fight" = "Koulovačka";
+"Skier" = "Lyžař";
+"A skier rides down the snow hills now and then" = "Občas sjede lyžař po sněhových kopcích";
+"Send a Skier Now" = "Poslat lyžaře hned";
+"The skier needs a hill of snow on a window to ride down." = "Lyžař potřebuje na okně kopec sněhu, po kterém sjede.";
 "The snowman throws snowballs at windows and icons" = "Sněhulák hází koule na okna a ikony";
 "Throws roughly every" = "Hází zhruba každých";
 "Click the snowman – every third hit knocks off a level. Sometimes it fights back." = "Klikni na sněhuláka – každý třetí zásah shodí jedno patro. Někdy se brání.";
@@ -110,9 +114,6 @@
 /* Temperature (melting and compaction) */
 "Sleet: nothing settles – drifts, icicles and snowmen melt fast." = "Déšť se sněhem: nic se neusazuje – závěje, rampouchy i sněhuláci rychle tají.";
 "Thaw: wet snow – drifts and icicles melt fast and snowmen shrink." = "Obleva: mokrý sníh – závěje a rampouchy rychle tají a sněhuláci se zmenšují.";
-"Freezing: snow slowly evaporates, icicles grow and windows start to frost over." = "Mrzne: sníh pomalu ubývá, rostou rampouchy a okna začínají namrzat.";
-"Hard frost: snow evaporates only very slowly, icicles grow fast and windows freeze over from the corners." = "Tuhý mráz: sníh ubývá jen velmi pomalu, rampouchy rychle rostou a okna zamrzají od rohů.";
-"Deep snow slowly settles and compacts." = "Hluboký sníh si pomalu sedá a slehne se.";
 
 /* Snowfall */
 "Calm snow over the active window" = "Klidné sněžení nad aktivním oknem";
@@ -157,3 +158,28 @@
 "iSnow Settings" = "Nastavení iSnow";
 "120 fps (ProMotion)" = "120 fps (ProMotion)";
 "60 fps" = "60 fps";
+
+"Freezing: nothing melts, icicles grow and windows start to frost over. The snowplow keeps the bottom clear." = "Mrzne: nic netaje, rostou rampouchy a okna začínají namrzat. Spodek obrazovky udržuje čistý sněžný pluh.";
+"Hard frost: icicles grow fast and windows freeze over from the corners." = "Tuhý mráz: rampouchy rychle rostou a okna zamrzají od rohů.";
+"Comes roughly every" = "Přijede zhruba každých";
+"Send the Snowplow Now" = "Poslat pluh hned";
+"Snow over full-screen apps" = "Sníh přes aplikace na celé obrazovce";
+"none" = "žádný";
+"In full screen only the falling snow (faded) and the icicles at the top stay – drifts, snowmen and the tree hide, and everything is back when you leave full screen." = "Na celé obrazovce zůstane jen padající sníh (průhlednější) a rampouchy nahoře – závěje, sněhuláci a stromeček se schovají a po odchodu z celé obrazovky je vše zpět.";
+"Light snow – full-screen app" = "Jemný sníh – aplikace na celé obrazovce";
+
+"Comes when the snow at the bottom reaches" = "Přijede, když sníh dole dosáhne";
+
+"Skiers ride down the snow hills now and then" = "Občas sjedou lyžaři po sněhových kopcích";
+"Come roughly every" = "Přijedou zhruba každých";
+"Skiers at once" = "Lyžařů najednou";
+"Send Skiers Now" = "Poslat lyžaře hned";
+"Light size" = "Velikost světýlek";
+"Brightness" = "Jas";
+"no glow" = "bez záře";
+"Skiers ride along the snow at the bottom now and then" = "Občas projedou lyžaři po sněhu dole";
+"They ski along the bottom of the screen, jump up onto the Dock, ride across it and jump off the other end." = "Jedou po spodku obrazovky, vyskočí na Dock, přejedou ho a na druhém konci skočí dolů.";
+
+"A snowplow clears the snow at the bottom by itself" = "Sněžný pluh sám uklízí sníh dole";
+"It drives across the whole screen – over the Dock too – whenever the snow at the bottom gets deep." = "Projede celou obrazovku – i přes Dock – vždy, když je dole hodně sněhu.";
+"Skiers" = "Lyžaři";

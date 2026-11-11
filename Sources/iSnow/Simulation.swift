@@ -53,6 +53,8 @@ final class Pile {
     var limit: [Float] = []          // per-bin drawing limit (the Dock's snow stays a thin ledge under windows)
     var lastSeen: Double = 0         // time of the last sync (for window speed)
     var parkedSince: Double?         // window went away (other Space, hidden) – kept, not drawn
+    /// The drift a window had before it went full screen – given back when it returns to that frame.
+    var stash: (rect: CGRect, bins: [Float], icicles: [Icicle], frost: Float)?
 
     init(key: Int, kind: SurfaceKind, rect: CGRect, binW: Float, now: Double) {
         self.key = key
@@ -116,7 +118,14 @@ final class Simulation {
     private var mouseLocal: SIMD2<Float>?
     private var shovelHeld: Float = 0         // how long ⌥ has been held
     private var santa: Christmas.Sleigh?
+    private var plow = Snowplow()
+    private var nextAutoPlow: Double = 2       // seconds until the next look at the snow height
     private var nextSanta: Double = 45
+    private var skiers: [Skier] = []
+    private var queuedSkiers: [Double] = []   // delays before the next skiers of a group set off
+    private var nextSkier: Double = -1        // set from the settings on the first frame
+    /// When any screen last had a skier (only one skis at a time, across all screens).
+    private static var skierSeen: Double = -10
     /// Short status for the menu ("Paused: full-screen app").
     var isFullscreenPaused: Bool { fullscreen }
 
@@ -197,7 +206,7 @@ final class Simulation {
             && (spans.count == 1 || !menuVisible)
         if fullscreen != wasFull {
             changed = true
-            if fullscreen {
+            if fullscreen && cfg.fullscreenSnow < 0.02 {
                 // Clear the air at once so nothing drifts over a video or presentation.
                 flakes.removeAll(keepingCapacity: true)
                 debris.removeAll(keepingCapacity: true)
@@ -226,6 +235,38 @@ final class Simulation {
                 }
                 let dx = Float(r.minX - p.rect.minX), dy = Float(r.minY - p.rect.minY)
                 let resized = abs(p.rect.width - r.width) > 0.5 || abs(p.rect.height - r.height) > 0.5
+                if p.kind == .window, abs(dx) > 0.5 || abs(dy) > 0.5 || resized {
+                    if let st = p.stash, abs(st.rect.minX - r.minX) < 2, abs(st.rect.minY - r.minY) < 2,
+                       abs(st.rect.width - r.width) < 2, abs(st.rect.height - r.height) < 2 {
+                        // Back from full screen: the window gets its old drift and icicles back.
+                        p.rect = r
+                        p.resize(binW: Self.binW)
+                        if st.bins.count == p.bins.count { p.bins = st.bins }
+                        p.icicles = st.icicles
+                        p.icicleVisible = Array(repeating: false, count: st.icicles.count)
+                        p.frost = st.frost
+                        p.stash = nil
+                        p.lastSeen = now
+                        p.dirty = true
+                        p.iceDirty = true
+                        changed = true
+                        return p
+                    }
+                    if isScreenSized(r) {
+                        // Going full screen: keep the drift aside instead of dropping it.
+                        if p.stash == nil { p.stash = (p.rect, p.bins, p.icicles, p.frost) }
+                        p.rect = r
+                        p.resize(binW: Self.binW)
+                        p.icicles = []
+                        p.icicleVisible = []
+                        p.frost = 0
+                        p.lastSeen = now
+                        p.dirty = true
+                        p.iceDirty = true
+                        changed = true
+                        return p
+                    }
+                }
                 if abs(dx) > 0.5 || abs(dy) > 0.5 || resized {
                     let dt = Float(max(1.0 / 60, min(0.5, now - p.lastSeen)))
                     let vel = SIMD2(dx / dt, dy / dt)
@@ -321,13 +362,17 @@ final class Simulation {
         if updateLimit(g, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
         order.append(g)
 
+        // Several windows vanishing at once (or anything vanishing around full screen) means a Space
+        // switch, not closing: keep the snow. A single window that disappears was closed or minimized.
+        let vanishedWindows = piles.filter { !seen.contains($0.key) && $0.value.parkedSince == nil && $0.value.kind == .window }.count
+        let spaceSwitch = now < keepVanishedUntil || fullscreen || wasFull || vanishedWindows >= 2
         for (k, p) in piles where !seen.contains(k) {
             if let since = p.parkedSince {
-                // Gone for good after 10 minutes on another Space.
-                if now - since > 600 { piles[k] = nil }
+                // Gone for good after 4 hours on another Space.
+                if now - since > 4 * 3600 { piles[k] = nil }
                 continue
             }
-            if now < keepVanishedUntil && p.kind == .window {
+            if spaceSwitch {
                 p.parkedSince = now          // switched Space: keep the snow for when it comes back
             } else {
                 shake(p, push: 0)            // closed, minimized or hidden: the snow falls
@@ -348,6 +393,12 @@ final class Simulation {
         }
         if hostsSnowman { syncSnowmen(); syncTree() }
         return changed
+    }
+
+    /// A window as big as the screen (below the notch / menu bar is enough) – i.e. full screen.
+    private func isScreenSized(_ r: CGRect) -> Bool {
+        r.minX <= 1 && r.minY <= 1 && r.maxX >= size.width - 1
+            && r.maxY >= size.height - max(safeTop, menuBarHeight) - 2
     }
 
     /// How much longer icicles get in the cold: 1× at 0 °C, 2× at −7 °C, ~3× in hard frost.
@@ -454,15 +505,10 @@ final class Simulation {
         return changed
     }
 
-    /// The Dock's snow: a thin ledge under a window that sits on the Dock, and while the cursor is
-    /// over the Dock (so labels and magnified icons stay readable).
+    /// The Dock's snow: a thin ledge under a window that sits on the Dock.
     private func updateDockLimit(_ p: Pile, windows: [CGRect], mouse: SIMD2<Float>?) -> Bool {
         if p.limit.count != p.bins.count { p.limit = Array(repeating: .infinity, count: p.bins.count) }
         let top = p.rect.maxY
-        let hover = mouse.map { m in
-            p.rect.insetBy(dx: -10, dy: -10).union(CGRect(x: p.rect.minX, y: top, width: p.rect.width, height: 90))
-                .contains(CGPoint(x: CGFloat(m.x), y: CGFloat(m.y)))
-        } ?? false
         var changed = false
         for i in p.bins.indices {
             let x = p.rect.minX + (CGFloat(i) + 0.5) * CGFloat(Self.binW)
@@ -471,7 +517,6 @@ final class Simulation {
                 if top + 4 >= w.minY && top + 4 <= w.maxY { l = 4; break }
                 if w.minY > top + 1 { l = min(l, Float(w.minY - top) - 1) }
             }
-            if hover { l = min(l, 3) }
             if p.limit[i] != l { p.limit[i] = l; changed = true }
         }
         if changed { p.dirty = true }
@@ -502,7 +547,7 @@ final class Simulation {
         shovelHeld = shovel ? shovelHeld + fdt : 0
         wind = Float(cfg.wind) * Float(sin(time * 0.071) * 16 + sin(time * 0.23) * 6 + sin(time * 0.017) * 12)
 
-        if !cfg.paused && !fullscreen {
+        if !cfg.paused && (!fullscreen || cfg.fullscreenSnow >= 0.02) {
             spawnAcc += 28 * cfg.density * Double(size.width) / 1000 * dt
             let maxF = Int(cfg.maxFlakes)
             while spawnAcc >= 1 {
@@ -532,7 +577,7 @@ final class Simulation {
             f.x += (wind * (0.35 + f.depth) + sin(f.phase) * f.amp + f.vx) * fdt
             f.y -= f.vy * fdt
             if f.vx != 0 { f.vx *= max(0, 1 - 2.5 * fdt); if abs(f.vx) < 1 { f.vx = 0 } }
-            if f.depth > 0.3, !sleet, let (p, b) = hit(x: f.x, oldY: oy, newY: f.y) {
+            if f.depth > 0.3, !sleet, !fullscreen, let (p, b) = hit(x: f.x, oldY: oy, newY: f.y) {
                 deposit(p, b, 0.35 * acc * (0.6 + f.depth))
                 flakes.swapAt(i, flakes.count - 1); flakes.removeLast(); continue
             }
@@ -556,7 +601,7 @@ final class Simulation {
             d.vx *= (1 - 0.8 * fdt)
             d.x += d.vx * fdt
             d.y += d.vy * fdt
-            if d.lands, d.vy < 0, let (p, b) = hit(x: d.x, oldY: oy, newY: d.y) {
+            if d.lands, d.vy < 0, !fullscreen, let (p, b) = hit(x: d.x, oldY: oy, newY: d.y) {
                 deposit(p, b, d.size * 0.5)
                 if d.vy < -220 && d.size > 4 && debris.count < 9000 {
                     // Impact: the clump bursts into powder.
@@ -608,16 +653,14 @@ final class Simulation {
             // Snow always settles and evaporates a little (slowly in frost), and melts fast above zero.
             // Deep snow also compacts, so drifts level off instead of growing forever.
             let base = cfg.meltBase / 60 * tick
-            let compact = Float(0.006) / 60 * tick
-            for p in landables {
-                var any = false
-                for k in p.bins.indices where p.bins[k] > 0 {
-                    p.bins[k] = max(0, p.bins[k] - base - p.bins[k] * compact)
-                    any = true
+            if base > 0 {
+                for p in landables {
+                    var any = false
+                    for k in p.bins.indices where p.bins[k] > 0 { p.bins[k] = max(0, p.bins[k] - base); any = true }
+                    if any { p.dirty = true }
                 }
-                if any { p.dirty = true }
+                for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - base * 0.2) }
             }
-            for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - base * 0.2) }
             // Frost on windows: grows on still windows when it is below zero, thaws above.
             let frostTarget: Float = cfg.windowFrost && temp < 0 ? min(1, -temp / 15) : 0
             for p in landables where p.kind == .window {
@@ -701,15 +744,132 @@ final class Simulation {
         }
 
         if hostsSnowman { stepSnowmen(dt: fdt); stepSanta(dt: fdt) }
+        if hostsSnowman && cfg.snowplow && !cfg.paused && !fullscreen {
+            // Every couple of seconds: is the snow at the bottom high enough to call the plow?
+            nextAutoPlow -= dt
+            if nextAutoPlow <= 0 {
+                nextAutoPlow = 2
+                if !plow.visible && groundNeedsPlowing { plow.startAutopilot(leftToRight: Bool.random(), screenWidth: W) }
+            }
+        }
+        if plow.visible || plow.input != 0 {
+            plow.step(dt: fdt, screenWidth: W, ground: piles[Self.groundKey], binW: Self.binW, debris: &debris,
+                      dock: dockLocal, dockPile: piles[Self.dockKey])
+        }
+        stepSkier(dt: dt)
+    }
+
+    // MARK: - Skier
+
+    private var skierElsewhere: Bool { skiers.isEmpty && CACurrentMediaTime() - Self.skierSeen < 0.5 }
+
+    private func skierInterval() -> Double { max(0.5, cfg.skierInterval) * 60 * Double.random(in: 0.8...1.2) }
+
+    /// Send a group of skiers down the tallest hill on a window right now: the first sets off at once,
+    /// the others follow one after another. Returns false if there is no hill (or skiers are already out).
+    func sendSkier() -> Bool {
+        guard !fullscreen, skiers.isEmpty, !skierElsewhere, startSkier() else { return false }
+        queueFollowers()
+        nextSkier = skierInterval()
+        return true
+    }
+
+    private func queueFollowers() {
+        let extra = max(0, Int(cfg.skierCount.rounded()) - 1)
+        var delay = 0.0
+        queuedSkiers = (0..<extra).map { _ in delay += Double.random(in: 1.0...2.8); return delay }
+    }
+
+    private var skierDir: Float = 1          // the whole group rides the same way
+
+    /// Skiers ride along the snow at the bottom of the screen, from one edge to the other.
+    private func startSkier() -> Bool {
+        guard let ground = piles[Self.groundKey] else { return false }
+        if skiers.isEmpty && queuedSkiers.isEmpty { skierDir = Bool.random() ? 1 : -1 }
+        let s = Skier.alongBottom(ground, dir: skierDir, width: W)
+        skiers.append(s)
+        // A little puff of powder where the skier pops up.
+        for _ in 0..<8 where debris.count < 9000 {
+            debris.append(Debris(x: s.x + Float.random(in: -7...7), y: s.y + Float.random(in: 0...4),
+                                 vx: Float.random(in: -40...40), vy: Float.random(in: 20...70),
+                                 size: Float.random(in: 1.2...2.4), alpha: 0.8, lands: false, fade: 1.5))
+        }
+        Self.skierSeen = CACurrentMediaTime()
+        return true
+    }
+
+    private func stepSkier(dt: Double) {
+        if cfg.skier && !cfg.paused && !fullscreen && skiers.isEmpty && queuedSkiers.isEmpty {
+            if nextSkier < 0 { nextSkier = min(skierInterval(), 45) }     // the first group comes soon
+            nextSkier -= dt
+            if nextSkier <= 0 {
+                // No hill (or skiers on another screen): try again a bit later.
+                if !skierElsewhere && startSkier() {
+                    queueFollowers()
+                    nextSkier = skierInterval()
+                } else {
+                    nextSkier = 30
+                }
+            }
+        }
+        if fullscreen { skiers = []; queuedSkiers = []; return }
+        // The rest of the group sets off one after another from the same hilltop.
+        if !queuedSkiers.isEmpty && !cfg.paused {
+            for k in queuedSkiers.indices { queuedSkiers[k] -= dt }
+            while let first = queuedSkiers.first, first <= 0 {
+                queuedSkiers.removeFirst()
+                _ = startSkier()
+            }
+        }
+        guard !skiers.isEmpty else { return }
+        Self.skierSeen = CACurrentMediaTime()
+        var i = 0
+        while i < skiers.count {
+            var s = skiers[i]
+            let alive = s.step(dt: Float(dt), host: piles[s.pileKey], width: W, debris: &debris) { x, y in
+                self.skierFloor(x, y)
+            }
+            if alive { skiers[i] = s; i += 1 } else { skiers.remove(at: i) }
+        }
+    }
+
+    /// Top of the snow on the highest surface below (x, y) – where a jumping skier lands.
+    private func skierFloor(_ x: Float, _ y: Float) -> (top: Float, pile: Pile?) {
+        let s = surfaceBelow(x: x, y: y)
+        return (s.top + driftHeight(s.key, at: x), piles[s.key])
+    }
+
+    /// Has the snow at the bottom (or on the Dock) reached the height set for the plow?
+    private var groundNeedsPlowing: Bool {
+        let limit = Float(cfg.autoPlowHeight)
+        func average(_ p: Pile?) -> Float {
+            guard let p else { return 0 }
+            var sum: Float = 0, n: Float = 0
+            for k in p.bins.indices where p.visible[k] { sum += p.bins[k]; n += 1 }
+            return n > 0 ? sum / n : 0
+        }
+        // Both the bottom and the Dock use the height from the settings.
+        return average(piles[Self.groundKey]) >= limit || average(piles[Self.dockKey]) >= limit
+    }
+
+    /// Send the snowplow across the bottom right now (settings button).
+    func sendPlow() {
+        guard hostsSnowman, !fullscreen else { return }
+        plow.startAutopilot(leftToRight: Bool.random(), screenWidth: W)
     }
 
     /// Does anything still need animating? If not, the display link goes to sleep.
     var isAnimating: Bool {
         if !cfg.paused && !fullscreen { return true }
-        if fullscreen { return false }
+        if fullscreen {
+            // Faded snow keeps falling over full-screen apps (unless set to none).
+            return (!cfg.paused && cfg.fullscreenSnow >= 0.02) || !flakes.isEmpty || !debris.isEmpty
+        }
+        if !skiers.isEmpty || !queuedSkiers.isEmpty { return true }
         // Paused: the lights only keep twinkling if the user wants that.
         if cfg.christmas && cfg.lightsWhilePaused && (cfg.christmasGarland || treePos != nil) { return true }
         if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty || santa != nil { return true }
+        if plow.isMoving || plow.input != 0 { return true }
         // While paused only a snowman in your hand or in the air needs frames.
         return hostsSnowman && snowmen.contains { $0.carried || $0.falling }
     }
@@ -929,8 +1089,9 @@ final class Simulation {
             guard c < p.bins.count else { continue }
             let top = Float(p.rect.maxY)
             guard m.y >= top - 3, m.y <= top + p.bins[c] + 4 else { continue }
-            for k in max(0, c - 3)...min(p.bins.count - 1, c + 3) where p.bins[k] > 0.4 && p.visible[k] {
-                let take = p.bins[k] * 0.7
+            // By hand (no shovel) a swipe only brushes a little off the top.
+            for k in max(0, c - 2)...min(p.bins.count - 1, c + 2) where p.bins[k] > 0.4 && p.visible[k] {
+                let take = p.bins[k] * 0.2
                 p.bins[k] -= take
                 debris.append(Debris(x: Float(p.rect.minX) + (Float(k) + 0.5) * Self.binW, y: top + p.bins[k] + take * 0.5,
                                      vx: v.x * 0.25 + Float.random(in: -20...20), vy: Float.random(in: 20...90),
@@ -948,7 +1109,7 @@ final class Simulation {
             let d = m.x - last.x
             return abs(d) < 0.3 ? 0 : (d > 0 ? 1 : -1)
         }()
-        let reach = 4                     // bins on each side (≈ 16 pt)
+        let reach = 6                     // bins on each side (≈ 24 pt) – the shovel bites much deeper than a hand
         for p in landables {
             let rel = m.x - Float(p.rect.minX)
             guard rel >= -16, rel < Float(p.rect.width) + 16 else { continue }
@@ -961,7 +1122,7 @@ final class Simulation {
             guard m.y >= top - 6, m.y <= top + tallest + 14 else { continue }
             var moved: Float = 0
             for k in lo...hi where p.bins[k] > 0.05 {
-                let take = p.bins[k] * min(1, 14 * dt)
+                let take = p.bins[k] * min(1, 22 * dt)
                 p.bins[k] -= take
                 moved += take
             }
@@ -1251,9 +1412,10 @@ final class Simulation {
     func buildParticles(into out: inout [Particle]) {
         let t = drawTime
         // Calm over the active window: flakes there fade to a light dusting (soft 40-pt edge).
-        let calm = cfg.calmActive ? activeRect : nil
+        let calm = cfg.calmActive && !fullscreen ? activeRect : nil
+        let fade: Float = fullscreen ? Float(cfg.fullscreenSnow) : 1
         for f in flakes {
-            var a = f.alpha, sz = f.size
+            var a = f.alpha * fade, sz = f.size
             if let r = calm {
                 let px = CGFloat(f.x), py = CGFloat(f.y)
                 if r.contains(CGPoint(x: px, y: py)) {
@@ -1272,14 +1434,18 @@ final class Simulation {
         }
         for d in debris {
             // Landing clumps are drawn solid; powder stays soft.
-            out.append(Particle(x: d.x, y: d.y, size: d.lands && d.size > 2.4 ? -d.size : d.size, alpha: max(0, d.alpha)))
+            out.append(Particle(x: d.x, y: d.y, size: d.lands && d.size > 2.4 ? -d.size : d.size, alpha: max(0, d.alpha) * fade))
         }
         for s in snowballs { out.append(Particle(x: s.x, y: s.y, size: -7.5, alpha: 1)) }
     }
 
     func buildMesh(into out: inout [Vertex]) {
         Mesh.tint = tint
-        if fullscreen { return }
+        if fullscreen {
+            // Over a full-screen app only the icicles along the top stay.
+            if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out) }
+            return
+        }
         if cfg.frost { buildFrost(into: &out) }
         for p in landables {
             if p.dirty || p.iceDirty { rebuildMesh(p) }
@@ -1288,6 +1454,8 @@ final class Simulation {
         if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out) }
         for s in shards { Mesh.icicle(&out, x: s.x, top: s.y, len: s.len, width: s.width, alpha: 0.9) }
         let style = Christmas.LightStyle(rawValue: cfg.lightStyle) ?? .colorful
+        Christmas.bulbScale = Float(cfg.lightSize)
+        Christmas.glow = Float(cfg.lightGlow)
         let menuY = H - Float(menuBarHeight)
         if cfg.christmas && cfg.christmasGarland && menuBarHeight > 0 {
             Christmas.garland(&out, width: W, y: menuY, t: drawTime, style: style) { x in self.underMenu(x) }
@@ -1297,7 +1465,11 @@ final class Simulation {
                            alpha: treeGhost ? 0.22 : 1)
         }
         if hostsSnowman { for s in snowmen where !s.hidden { s.build(into: &out) } }
+        for s in skiers where !localOcc.contains(where: { $0.contains(CGPoint(x: CGFloat(s.x), y: CGFloat(s.y + 10))) }) {
+            s.build(into: &out, t: drawTime)
+        }
         if let sl = santa { Christmas.sleigh(&out, sl, t: drawTime) }
+        if plow.visible { plow.build(into: &out, t: drawTime) }
         if let m = shovelAt { Mesh.shovel(&out, at: m, digging: shovelDigging) }
     }
 
@@ -1323,6 +1495,8 @@ final class Simulation {
             let k = max(0, min(n - 1, i))
             return lim.isEmpty ? p.bins[k] : min(p.bins[k], lim[k])
         }
+        // Snow texture anchored to the pile, so it travels with a dragged window.
+        let mat = Mesh.snowMaterial(kind: 1, anchor: (x0, base))
         var i = 0
         while i < n {
             if !p.visible[i] || p.bins[i] < 0.25 { i += 1; continue }
@@ -1332,7 +1506,7 @@ final class Simulation {
             let hr = (i < n - 1 && p.visible[i + 1]) ? (h(i) + h(i + 1)) * 0.5 : 0
             let hm = h(i)
             let m = l + bw * 0.5
-            Mesh.snowColumn(&p.mesh, l: l, m: m, r: r, base: base, hl: hl, hm: hm, hr: hr)
+            Mesh.snowColumn(&p.mesh, l: l, m: m, r: r, base: base, hl: hl, hm: hm, hr: hr, material: mat)
             i += 1
         }
         if p.kind == .window && p.frost > 0.01 { buildWindowFrost(p) }
@@ -1397,10 +1571,11 @@ final class Simulation {
     private func buildMenuBar(into out: inout [Vertex]) {
         let y = H - Float(menuBarHeight)
         let bw = Self.binW
+        let mat = Mesh.snowMaterial(kind: 1, anchor: (0, y))
         for (i, h) in menuSnow.enumerated() where h > 0.2 {
             let l = Float(i) * bw
             if underMenu(l) { continue }
-            Mesh.rect(&out, x: l, y: y - h * 0.5, w: bw, h: h, top: Mesh.snowTop, bottom: Mesh.snowBase)
+            Mesh.snowRect(&out, x: l, y: y - h * 0.5, w: bw, h: h, material: mat)
         }
         for ic in menuIcicles where ic.len > 0.6 && !underMenu(ic.x) {
             Mesh.icicle(&out, x: ic.x, top: y, len: ic.len, width: ic.width * iceWidth(ic.len), alpha: 0.85)

@@ -27,6 +27,8 @@ enum Snapshot {
         cfg.snowmanCount = Double(env["ISNOW_SNOWMEN"] ?? "") ?? 3
         cfg.christmas = env["ISNOW_XMAS"] != nil
         cfg.lightStyle = Int(env["ISNOW_XMAS"] ?? "") ?? 0
+        if let v = env["ISNOW_LIGHTSIZE"].flatMap(Double.init) { cfg.lightSize = v }
+        if let v = env["ISNOW_GLOW"].flatMap(Double.init) { cfg.lightGlow = v }
         cfg.sparkle = true
         var t = 0.0
         let dt = 1.0 / 30
@@ -37,8 +39,11 @@ enum Snapshot {
         if let w = widgetEnv { cfg.onWidgets = w == "1" }
         // ISNOW_SANTA=1 sends Santa's sleigh about 2.5 s before the picture is taken, so it is on screen.
         var santaAt: Double? = env["ISNOW_SANTA"] == "1" ? max(0, seconds - 2.5) : nil
+        // ISNOW_SKIER=1.5 sends a group of skiers along the bottom that many seconds before the picture.
+        var skierAt: Double? = env["ISNOW_SKIER"].flatMap(Double.init).map { max(0, seconds - $0) }
         while t < seconds {
             if let s = santaAt, t >= s { sim.launchSanta(); santaAt = nil }
+            if let s = skierAt, t >= s { print("skier:", sim.sendSkier()); skierAt = nil }
             if notchFull && t > 60 {
                 // From now on a full-screen window fills everything below the notch; no menu bar.
                 let full = [TrackedWindow(id: 50, frame: CGRect(x: 0, y: 0, width: size.width, height: size.height - 32))]

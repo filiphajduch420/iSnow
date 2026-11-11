@@ -23,7 +23,7 @@ struct SettingsView: View {
             DriftTab(settings: settings, delegate: delegate).tabItem { Label("Drifts", systemImage: "mountain.2") }.tag(1)
             SnowmanTab(settings: settings, delegate: delegate).tabItem { Label("Snowman", systemImage: "figure.wave") }.tag(2)
             ChristmasTab(settings: settings, delegate: delegate).tabItem { Label("Christmas", systemImage: "gift") }.tag(3)
-            ExtrasTab(settings: settings).tabItem { Label("Other", systemImage: "sparkles") }.tag(4)
+            ExtrasTab(settings: settings, delegate: delegate).tabItem { Label("Other", systemImage: "sparkles") }.tag(4)
         }
         .frame(width: 500)
         .onAppear {
@@ -97,8 +97,6 @@ private struct SnowTab: View {
                 }
                 Text(temperatureHint)
                     .font(.callout).foregroundStyle(.secondary)
-                Text("Deep snow slowly settles and compacts.")
-                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("Flakes") {
                 ValueSlider(title: "Size", value: $settings.config.flakeSize, range: R.flakeSize, format: times)
@@ -144,8 +142,8 @@ private struct SnowTab: View {
         let t = settings.config.temperature
         if t > 4 { return String(localized: "Sleet: nothing settles – drifts, icicles and snowmen melt fast.") }
         if t > 0 { return String(localized: "Thaw: wet snow – drifts and icicles melt fast and snowmen shrink.") }
-        if t > -8 { return String(localized: "Freezing: snow slowly evaporates, icicles grow and windows start to frost over.") }
-        return String(localized: "Hard frost: snow evaporates only very slowly, icicles grow fast and windows freeze over from the corners.")
+        if t > -8 { return String(localized: "Freezing: nothing melts, icicles grow and windows start to frost over. The snowplow keeps the bottom clear.") }
+        return String(localized: "Hard frost: icicles grow fast and windows freeze over from the corners.")
     }
 
     private var tintBinding: Binding<Color> {
@@ -245,6 +243,25 @@ private struct SnowmanTab: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             .disabled(!settings.config.snowman)
+            Section("Skiers") {
+                Toggle("Skiers ride along the snow at the bottom now and then", isOn: $settings.config.skier)
+                ValueSlider(title: "Come roughly every", value: $settings.config.skierInterval, range: R.skierEvery, step: 0.5) {
+                    $0 < 1 ? String(localized: "\(Int(($0 * 60).rounded())) s")
+                           : ($0.truncatingRemainder(dividingBy: 1) == 0 ? String(localized: "\(Int($0)) min")
+                                                                          : $0.formatted(.number.precision(.fractionLength(1))) + " min")
+                }
+                .disabled(!settings.config.skier)
+                ValueSlider(title: "Skiers at once", value: $settings.config.skierCount, range: 1...5, step: 1) {
+                    "\(Int($0))"
+                }
+                .disabled(!settings.config.skier)
+                HStack {
+                    Spacer()
+                    Button("Send Skiers Now") { delegate.sendSkier() }
+                }
+                Text("They ski along the bottom of the screen, jump up onto the Dock, ride across it and jump off the other end.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
@@ -270,6 +287,10 @@ private struct ChristmasTab: View {
                     Text("Warm white").tag(Christmas.LightStyle.warmWhite.rawValue)
                     Text("Chasing").tag(Christmas.LightStyle.chase.rawValue)
                 }
+                ValueSlider(title: "Light size", value: $settings.config.lightSize, range: 0.5...2.5, format: times)
+                ValueSlider(title: "Brightness", value: $settings.config.lightGlow, range: 0...2.5) {
+                    $0 < 0.02 ? String(localized: "no glow") : times($0)
+                }
                 Toggle("Keep the lights twinkling while the snow is paused", isOn: $settings.config.lightsWhilePaused)
                 Text("Costs a little power.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -290,6 +311,7 @@ private struct ChristmasTab: View {
 
 private struct ExtrasTab: View {
     @Bindable var settings: Settings
+    let delegate: AppDelegate
 
     var body: some View {
         Form {
@@ -297,8 +319,24 @@ private struct ExtrasTab: View {
                 Toggle("The cursor scatters flakes and a quick swipe brushes snow off", isOn: $settings.config.mouse)
                 Text("Hold ⌥ Option to get a shovel at the cursor and clear away the snow it touches – even at the bottom of the screen and on the Dock. Snowmen can be dragged with the mouse.")
                     .font(.callout).foregroundStyle(.secondary)
+                Toggle("A snowplow clears the snow at the bottom by itself", isOn: $settings.config.snowplow)
+                Text("It drives across the whole screen – over the Dock too – whenever the snow at the bottom gets deep.")
+                    .font(.callout).foregroundStyle(.secondary)
+                ValueSlider(title: "Comes when the snow at the bottom reaches", value: $settings.config.autoPlowHeight, range: 10...150, step: 5) {
+                    String(localized: "\(Int($0)) pt")
+                }
+                .disabled(!settings.config.snowplow)
+                HStack {
+                    Spacer()
+                    Button("Send the Snowplow Now") { delegate.sendPlow() }
+                        .disabled(!settings.config.snowplow)
+                }
                 Toggle("Frosted screen edges", isOn: $settings.config.frost)
-                Toggle("Don't snow over full-screen apps", isOn: $settings.config.pauseFullscreen)
+                ValueSlider(title: "Snow over full-screen apps", value: $settings.config.fullscreenSnow, range: 0...1, step: 0.05) {
+                    $0 < 0.02 ? String(localized: "none") : ($0.formatted(.percent.precision(.fractionLength(0))))
+                }
+                Text("In full screen only the falling snow (faded) and the icicles at the top stay – drifts, snowmen and the tree hide, and everything is back when you leave full screen.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("Performance") {
                 Picker("Frame rate", selection: $settings.config.fps) {

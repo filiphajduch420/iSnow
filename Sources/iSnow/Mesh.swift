@@ -28,15 +28,47 @@ enum Mesh {
     }
 
     /// One drift column: two trapezoids with a vertical gradient (bluish shade at the bottom).
+    /// Screen-anchored texture; drifts that move use the `anchor:` variant.
     static func snowColumn(_ out: inout [Vertex], l: Float, m: Float, r: Float, base: Float,
                            hl: Float, hm: Float, hr: Float) {
-        let top = snowTop, bot = snowBase
+        snowColumn(&out, l: l, m: m, r: r, base: base, hl: hl, hm: hm, hr: hr, material: snowMaterial(kind: 1, anchor: (0, 0)))
+    }
+
+    /// Drift column drawn with the procedural snow material (crust, cool shadow, grain, glints – see the
+    /// shader). `material` comes from `snowMaterial(kind: 1, anchor:)`, anchored to the pile so the texture
+    /// travels with a dragged window. The colour gradient and tint are applied in the shader.
+    static func snowColumn(_ out: inout [Vertex], l: Float, m: Float, r: Float, base: Float,
+                           hl: Float, hm: Float, hr: Float, material mat: SnowMaterial) {
+        let a0 = snowTop.3, a1 = snowBase.3
+        @inline(__always) func s(_ x: Float, _ y: Float, depth: Float, grad: Float) {
+            out.append(Vertex(x: x, y: y, r: mat.r + min(depth, 2000), g: mat.g + grad, b: mat.b,
+                              a: a0 + (a1 - a0) * grad))
+        }
         // left half
-        v(&out, l, base, bot); v(&out, m, base, bot); v(&out, m, base + hm, top)
-        v(&out, l, base, bot); v(&out, m, base + hm, top); v(&out, l, base + hl, top)
+        s(l, base, depth: hl, grad: 1); s(m, base, depth: hm, grad: 1); s(m, base + hm, depth: 0, grad: 0)
+        s(l, base, depth: hl, grad: 1); s(m, base + hm, depth: 0, grad: 0); s(l, base + hl, depth: 0, grad: 0)
         // right half
-        v(&out, m, base, bot); v(&out, r, base, bot); v(&out, r, base + hr, top)
-        v(&out, m, base, bot); v(&out, r, base + hr, top); v(&out, m, base + hm, top)
+        s(m, base, depth: hm, grad: 1); s(r, base, depth: hr, grad: 1); s(r, base + hr, depth: 0, grad: 0)
+        s(m, base, depth: hm, grad: 1); s(r, base + hr, depth: 0, grad: 0); s(m, base + hm, depth: 0, grad: 0)
+    }
+
+    /// Flat-topped block of snow (menu-bar powder) with the drift material.
+    static func snowRect(_ out: inout [Vertex], x: Float, y: Float, w: Float, h: Float, material mat: SnowMaterial) {
+        snowColumn(&out, l: x, m: x + w * 0.5, r: x + w, base: y, hl: h, hm: h, hr: h, material: mat)
+    }
+
+    /// Integer offsets that tag mesh vertices as procedural snow for `mesh_fs` (plain colours stay ≤ 1):
+    /// red += 2048·kind (1 = drift, red/green = depth/gradient; 2 = snow ball, plain colour),
+    /// green/blue += 4·anchor in quarter points mod 512 (the grain is anchored to the shape).
+    struct SnowMaterial { let r, g, b: Float }
+
+    static func snowMaterial(kind: Int, anchor: (Float, Float)) -> SnowMaterial {
+        func q(_ v: Float) -> Float {
+            guard v.isFinite else { return 0 }
+            let i = Int((Double(v) * 4).rounded(.down).truncatingRemainder(dividingBy: 2048))
+            return Float((i + 2048) % 2048) * 4
+        }
+        return SnowMaterial(r: Float(2048 * kind), g: q(anchor.0), b: q(anchor.1))
     }
 
     static func rect(_ out: inout [Vertex], x: Float, y: Float, w: Float, h: Float, top: RGBA, bottom: RGBA) {
@@ -58,13 +90,26 @@ enum Mesh {
     /// Shaded ball – a fan from a lighter centre to a bluish rim.
     static func circle(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, center: RGBA, rim: RGBA, segments: Int = 28) {
         let ox = cx - r * 0.25, oy = cy + r * 0.25        // light from the top left
+        // Big white balls with a bluish rim (snowman bodies, rolled balls) get the snow grain, anchored to
+        // the ball's centre. Everything else (eyes, lights, Santa, ornaments) stays a plain colour.
+        var c = center, e = rim
+        if segments >= 16 && r >= 4 && isSnowBall(center: center, rim: rim) {
+            let m = snowMaterial(kind: 2, anchor: (cx, cy))
+            c = (center.0 + m.r, center.1 + m.g, center.2 + m.b, center.3)
+            e = (rim.0 + m.r, rim.1 + m.g, rim.2 + m.b, rim.3)
+        }
         var prev = (cx + r, cy)
         for s in 1...segments {
             let a = Float(s) / Float(segments) * 2 * .pi
             let p = (cx + cos(a) * r, cy + sin(a) * r)
-            v(&out, ox, oy, center); v(&out, prev.0, prev.1, rim); v(&out, p.0, p.1, rim)
+            v(&out, ox, oy, c); v(&out, prev.0, prev.1, e); v(&out, p.0, p.1, e)
             prev = p
         }
+    }
+
+    private static func isSnowBall(center c: RGBA, rim e: RGBA) -> Bool {
+        c.0 >= 0.97 && c.1 >= 0.97 && c.2 >= 0.97 && c.3 > 0 && c.3 == e.3
+            && e.2 >= 0.85 && e.2 <= 1 && e.0 >= 0.6 && e.0 < e.2
     }
 
     /// Circular sector (frost in window corners).

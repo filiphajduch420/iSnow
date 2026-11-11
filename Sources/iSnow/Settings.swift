@@ -59,12 +59,23 @@ struct SimConfig: Codable, Equatable, Sendable {
     var christmasHats = true
     var lightStyle = 0                 // Christmas.LightStyle
     var treeSize: Double = 1.3
+    var lightSize: Double = 1.0        // size of the Christmas light bulbs
+    var lightGlow: Double = 1.0        // how strongly they shine (0 = no glow)
+    var snowplow = true                // drive a snowplow along the bottom with ⌥⌘ + ←/→
+    var autoPlow = true                // the snowplow clears the bottom by itself now and then
+    var autoPlowEvery: Double = 15     // (unused since 1.1 – the plow now comes by snow height)
+    var autoPlowHeight: Double = 60    // the plow comes when the snow at the bottom is this high (points)
     var santa = true                   // Santa's sleigh flies by now and then in Christmas mode
+    var skier = true                   // a skier rides down the snow hills on windows now and then
+    var skierEvery: Double = 6         // (unused since 1.1 – see skierInterval)
+    var skierInterval: Double = 2      // minutes between groups of skiers
+    var skierCount: Double = 3         // how many skiers ride together (one after another)
     var lightsWhilePaused = false      // keep the Christmas lights twinkling while the snow is paused
     // Other
     var mouse = true
     var frost = false
-    var pauseFullscreen = true
+    var pauseFullscreen = true         // detect full-screen apps (hide decorations there)
+    var fullscreenSnow: Double = 0.3   // opacity of the snowfall over full-screen apps (0 = no snow)
     var fahrenheit = Locale.current.measurementSystem == .us
     var batterySaver = true            // on battery: 30 fps, 1× rendering, fewer flakes, no sparkle
     var retina = false                 // render at the screen's full Retina resolution (costs battery)
@@ -78,19 +89,18 @@ struct SimConfig: Codable, Equatable, Sendable {
              unlimitedDrifts, windowDepth, groundDepth, accumulation, temperature, windowFrost, icicles, icicleLength, snowman,
              snowmanSize, snowmanCount, snowmanGhost,
              snowmanBreak, snowballs, throwEvery, christmas, christmasTree, christmasGarland, christmasHats, lightStyle,
-             treeSize, santa, lightsWhilePaused, calmActive, fahrenheit, batterySaver, retina, hideFromCapture, mouse, frost, pauseFullscreen, fps
+             treeSize, lightSize, lightGlow, santa, skier, skierEvery, skierInterval, skierCount, snowplow, autoPlow, autoPlowEvery, autoPlowHeight, lightsWhilePaused, calmActive, fahrenheit, batterySaver, retina, hideFromCapture, mouse, frost, pauseFullscreen, fullscreenSnow, fps
     }
 
     var preset: Intensity? {
         Intensity.allCases.first { abs($0.density - density) < 0.01 && abs($0.maxFlakes - maxFlakes) < 1 }
     }
 
-    /// Melting in points per minute: slow evaporation even in frost (slower the colder it is),
+    /// Melting in points per minute: nothing below zero (the snowplow keeps the bottom clear),
     /// fast thaw above zero.
     var meltBase: Float {
         let t = Float(temperature)
-        if t > 0 { return 4 + t * 4 }
-        return 0.35 - min(0.25, -t * 0.01)
+        return t > 0 ? 4 + t * 4 : 0
     }
 
     mutating func apply(_ p: Intensity) {
@@ -103,7 +113,13 @@ struct SimConfig: Codable, Equatable, Sendable {
     /// are kept), and every value is clamped to the range the settings UI allows.
     static func load(from d: UserDefaults) -> SimConfig {
         guard let data = d.data(forKey: "config") else { return SimConfig() }
-        return decodeLeniently(data)
+        var cfg = decodeLeniently(data)
+        // The plow used to come at 30 pt – let the hill grow higher now (one-time update of the old default).
+        if !d.bool(forKey: "plowHeight60") {
+            d.set(true, forKey: "plowHeight60")
+            if cfg.autoPlowHeight == 30 { cfg.autoPlowHeight = 60 }
+        }
+        return cfg
     }
 
     /// Merges the stored JSON into the defaults key by key, keeping only the keys that decode.
@@ -142,6 +158,11 @@ struct SimConfig: Codable, Equatable, Sendable {
             v.isFinite ? min(max(v, r.lowerBound), r.upperBound) : fallback
         }
         c.density = fit(density, Ranges.density, def.density)
+        c.autoPlowEvery = fit(autoPlowEvery, 2...120, def.autoPlowEvery)
+        c.autoPlowHeight = fit(autoPlowHeight, 10...150, def.autoPlowHeight)
+        c.fullscreenSnow = fit(fullscreenSnow, 0...1, def.fullscreenSnow)
+        c.lightSize = fit(lightSize, 0.5...2.5, def.lightSize)
+        c.lightGlow = fit(lightGlow, 0...2.5, def.lightGlow)
         c.maxFlakes = fit(maxFlakes, Ranges.maxFlakes, def.maxFlakes)
         c.flakeSize = fit(flakeSize, Ranges.flakeSize, def.flakeSize)
         c.fallSpeed = fit(fallSpeed, Ranges.fallSpeed, def.fallSpeed)
@@ -156,6 +177,9 @@ struct SimConfig: Codable, Equatable, Sendable {
         c.snowmanBreak = fit(snowmanBreak, Ranges.snowmanBreak, def.snowmanBreak)
         c.throwEvery = fit(throwEvery, Ranges.throwEvery, def.throwEvery)
         c.treeSize = fit(treeSize, Ranges.treeSize, def.treeSize)
+        c.skierEvery = fit(skierEvery, Ranges.skierEvery, def.skierEvery)
+        c.skierInterval = fit(skierInterval, Ranges.skierEvery, def.skierInterval)
+        c.skierCount = fit(skierCount, 1...5, def.skierCount).rounded()
         c.fps = Ranges.fps.min { abs($0 - fps) < abs($1 - fps) } ?? def.fps
         c.lightStyle = min(max(lightStyle, Ranges.lightStyle.lowerBound), Ranges.lightStyle.upperBound)
         c.tint = (0..<3).map { i in i < tint.count ? fit(tint[i], 0...1, 1) : 1 }
@@ -179,6 +203,7 @@ struct SimConfig: Codable, Equatable, Sendable {
         static let snowmanBreak: ClosedRange<Double> = 0.2...20        // minutes
         static let throwEvery: ClosedRange<Double> = 3...180           // seconds
         static let treeSize: ClosedRange<Double> = 0.5...3
+        static let skierEvery: ClosedRange<Double> = 0.5...60          // minutes (from 30 s)
         static let fps = [30, 60, 120]
         static let lightStyle: ClosedRange<Int> = 0...2
     }

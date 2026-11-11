@@ -39,7 +39,8 @@ struct MenuContent: View {
             }
         }
         if state.fullscreenPaused && !state.hidden {
-            Text("Paused – full-screen app")
+            Text(settings.config.fullscreenSnow < 0.02 ? LocalizedStringKey("Paused – full-screen app")
+                                                         : LocalizedStringKey("Light snow – full-screen app"))
         }
         if state.batterySaverActive && !state.hidden {
             Text("Battery saver on")
@@ -466,6 +467,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for o in overlays where o.sim.hostsSnowman { o.sim.buildSnowmanNow(); o.wake() }
     }
 
+    func sendPlow() {
+        for o in overlays where o.sim.hostsSnowman { o.sim.sendPlow(); o.wake() }
+    }
+
+    /// Sends a skier down the first screen that has a big enough hill on a window.
+    func sendSkier() {
+        for o in overlays where o.sim.sendSkier() { o.wake(); break }
+    }
+
     func launchSanta() {
         for o in overlays where o.sim.hostsSnowman { o.sim.launchSanta(); o.wake() }
     }
@@ -493,10 +503,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             let host = NSHostingController(rootView: settingsRoot(tab: tab))
+            // The tabs are scrolling forms without an intrinsic height, so the window must not size
+            // itself from the content (it would collapse to the tab bar). Give it a fixed size instead.
+            host.sizingOptions = []
             let w = NSWindow(contentViewController: host)
-            w.styleMask = [.titled, .closable, .miniaturizable]
+            w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             w.title = String(localized: "iSnow Settings")
             w.isReleasedWhenClosed = false
+            w.setContentSize(NSSize(width: 500, height: 640))
+            w.contentMinSize = NSSize(width: 500, height: 380)
+            w.contentMaxSize = NSSize(width: 500, height: 2000)
             w.center()
             settingsWindow = w
             settingsHost = host

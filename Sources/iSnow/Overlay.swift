@@ -131,7 +131,8 @@ final class Overlay: NSObject {
         let m = NSEvent.mouseLocation
         let local = CGPoint(x: m.x - sim.origin.x, y: m.y - sim.origin.y)
         let inside = local.x >= 0 && local.y >= 0 && local.x <= sim.size.width && local.y <= sim.size.height
-        let shovel = NSEvent.modifierFlags.contains(.option)
+        let mods = NSEvent.modifierFlags
+        let shovel = mods.contains(.option)
         sim.step(dt: dt, now: CACurrentMediaTime(), mouse: inside ? local : nil, shovel: shovel)
         particles.removeAll(keepingCapacity: true)
         mesh.removeAll(keepingCapacity: true)

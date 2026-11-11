@@ -1,11 +1,17 @@
 import AppKit
+import ImageIO
+import Metal
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Renders the README screenshots without any screen-recording permission: a drawn winter desktop
 /// (wallpaper, windows, widgets, Dock, menu bar) with iSnow's real simulation and renderer on top,
-/// plus the settings window rendered from its SwiftUI view.
+/// plus every tab of the settings window rendered from its SwiftUI view.
 @MainActor
 enum Promo {
+    /// What happens in the last seconds before the picture is taken.
+    enum Action { case none, skiers, plow, shovel, fullscreen }
+
     struct Scene {
         let name: String
         var temperature: Double = -6
@@ -17,6 +23,12 @@ enum Promo {
         var dragFrames = 0
         var finalDensity = 1.4
         var santa = false              // send Santa's sleigh so it is on screen in the picture
+        var action: Action = .none
+        var lightSize = 1.0
+        var lightGlow = 1.0
+        var treeSize = 1.3
+        /// Close-ups saved instead of the whole screen: file name and region in points.
+        var crops: [(String, CGRect)] = []
     }
 
     static let size = CGSize(width: 1440, height: 900)
@@ -31,21 +43,40 @@ enum Promo {
         Scene(name: "christmas", temperature: -4, seconds: 120, christmas: true, snowmen: 2, santa: true),
         Scene(name: "slide", temperature: -5, seconds: 140, snowmen: 2, dragFrames: 9),
         Scene(name: "frost", temperature: -20, seconds: 200, snowmen: 1, frostEdges: true, sparkle: true, finalDensity: 2.2),
+        Scene(name: "skiers", temperature: -6, seconds: 140, snowmen: 2, action: .skiers),
+        Scene(name: "snowplow", temperature: -6, seconds: 150, snowmen: 2, action: .plow),
+        Scene(name: "shovel", temperature: -6, seconds: 140, snowmen: 2, action: .shovel,
+              crops: [("shovel", CGRect(x: 0, y: 0, width: 560, height: 350))]),
+        Scene(name: "lights", temperature: -5, seconds: 120, christmas: true, snowmen: 2, lightSize: 2.1, lightGlow: 1.9,
+              treeSize: 1.9, crops: [("lights", CGRect(x: 0, y: 500, width: 640, height: 400)),
+                                     ("tree", CGRect(x: 60, y: 0, width: 640, height: 400))]),
+        Scene(name: "fullscreen", temperature: -8, seconds: 150, snowmen: 2, finalDensity: 3.2, action: .fullscreen),
     ]
 
     static func run(dir: String, delegate: AppDelegate) {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         guard let renderer = Renderer() else { print("no metal"); exit(1) }
-        for s in scenes {
-            render(s, renderer: renderer, path: "\(dir)/\(s.name).png")
+        let only = ProcessInfo.processInfo.environment["ISNOW_PROMO_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
+        for s in scenes where only?.contains(s.name) ?? true {
+            render(s, renderer: renderer, dir: dir)
             print("scene \(s.name)")
         }
-        renderSettings(dir: dir, delegate: delegate)
+        if only == nil || only!.contains("settings") { renderSettings(dir: dir, delegate: delegate) } else { exit(0) }
     }
 
     // MARK: Desktop scenes
 
-    static func render(_ scene: Scene, renderer: Renderer, path: String) {
+    /// One frame of the simulation: its particles and triangles.
+    struct Frame { var particles: [Particle] = []; var mesh: [Vertex] = [] }
+
+    static func capture(_ sim: Simulation) -> Frame {
+        var f = Frame()
+        sim.buildParticles(into: &f.particles)
+        sim.buildMesh(into: &f.mesh)
+        return f
+    }
+
+    static func render(_ scene: Scene, renderer: Renderer, dir: String) {
         let screen = CGRect(origin: .zero, size: size)
         let visible = CGRect(x: 0, y: dock.maxY, width: size.width, height: size.height - menuH - dock.maxY)
         let sim = Simulation(screenFrame: screen, visibleFrame: visible, hostsSnowman: true)
@@ -57,14 +88,20 @@ enum Promo {
         cfg.frost = scene.frostEdges
         cfg.sparkle = scene.sparkle
         cfg.icicleLength = 1.2
-        cfg.santa = false              // no random flights; the scene sends Santa itself (below)
+        cfg.lightSize = scene.lightSize
+        cfg.lightGlow = scene.lightGlow
+        cfg.treeSize = scene.treeSize
+        cfg.santa = false              // no random visitors: the scene sends Santa, skiers or the plow itself
+        cfg.skier = false
+        cfg.snowplow = false           // (sendPlow() still works)
         var wins = [TrackedWindow(id: 2, frame: terminal), TrackedWindow(id: 1, frame: notes)]
+        var menuBars: [CGRect]? = nil
         let widgets = widgetRects.enumerated().map { TrackedWindow(id: 100 + $0.offset, frame: $0.element) }
         var t = 0.0
         let dt = 1.0 / 30
-        func tick() {
-            sim.sync(windows: wins, occluders: [], dock: dock, icons: [], widgets: widgets, now: t, cfg: cfg)
-            sim.step(dt: dt, now: t)
+        func tick(mouse: CGPoint? = nil, shovel: Bool = false) {
+            sim.sync(windows: wins, occluders: [], dock: dock, icons: [], widgets: widgets, menuBars: menuBars, now: t, cfg: cfg)
+            sim.step(dt: dt, now: t, mouse: mouse, shovel: shovel)
             t += dt
         }
         // Pile up snow in a blizzard, then let a lighter snowfall show.
@@ -85,9 +122,191 @@ enum Promo {
             }
         }
 
-        Snapshot.renderPNG(sim, renderer: renderer, size: size, path: path) { ctx in
-            drawDesktop(ctx, windows: wins, christmas: scene.christmas, temperature: scene.temperature)
+        var frame: Frame
+        var crops = scene.crops
+        var cursor: CGPoint?
+        var fullscreen = false
+        switch scene.action {
+        case .none:
+            frame = capture(sim)
+        case .skiers:
+            // Send a group and keep the moment with the most skiers in the picture – best with one in the air.
+            _ = sim.sendSkier()
+            tick()
+            // The group rides away from the edge it came in at; frame the end of the Dock where they jump off.
+            let toRight = (skierXs(capture(sim).mesh).first ?? 0) < Float(size.width / 2)
+            let region = CGRect(x: toRight ? dock.maxX - 420 : dock.minX - 220, y: 0, width: 640, height: 400)
+            crops = [("skiers", region)]
+            frame = capture(sim)
+            var best = -1.0
+            for _ in 0..<(14 * 30) {
+                tick()
+                let f = capture(sim)
+                let score = skierScore(f.mesh, region: region)
+                if score > best { best = score; frame = f }
+            }
+            print("skiers: score \(best)")
+        case .plow:
+            // The truck comes in from one edge (chosen at random) – follow it with an animated GIF of that side
+            // and take the picture while it clears the bottom just before the Dock.
+            sim.sendPlow()
+            tick()
+            let fromLeft = (plowX(capture(sim).mesh) ?? 0) < Float(size.width / 2)
+            let gifRegion = CGRect(x: fromLeft ? 0 : size.width - 720, y: 0, width: 720, height: 240)
+            crops = [("snowplow", CGRect(x: fromLeft ? 0 : size.width - 640, y: 0, width: 640, height: 400))]
+            let bg = desktopImage(windows: wins, christmas: false, temperature: scene.temperature, scale: 1)
+            var gif: [CGImage] = []
+            frame = capture(sim)
+            var shot = false
+            for i in 0..<(9 * 30) {
+                tick()
+                let f = capture(sim)
+                guard let x = plowX(f.mesh) else { if shot { break } else { continue } }
+                let along = fromLeft ? x : Float(size.width) - x
+                if !shot && along >= 215 { frame = f; shot = true }
+                if i % 2 == 0, along < 820, let img = image(f, renderer: renderer, scale: 1, background: { ctx in
+                    ctx.draw(bg, in: CGRect(origin: .zero, size: size))
+                }), let c = img.cropping(to: pixelRect(gifRegion, scale: 1)) {
+                    gif.append(c)
+                }
+                if shot && along >= 820 { break }
+            }
+            writeGIF(gif, path: "\(dir)/snowplow.gif", delay: 2.0 / 30)
+        case .shovel:
+            // Hold ⌥ at the bottom left, then push the shovel to the right through the drift.
+            let y = CGFloat(min(40, max(10, surface(capture(sim).mesh, x: 140) - 2)))
+            var x: CGFloat = 110
+            for _ in 0..<12 { tick(mouse: CGPoint(x: x, y: y), shovel: true) }
+            for _ in 0..<66 {
+                x += 2.6
+                tick(mouse: CGPoint(x: x, y: y), shovel: true)
+            }
+            cursor = CGPoint(x: x, y: y)
+            frame = capture(sim)
+        case .fullscreen:
+            // A video player goes full screen: only faded snowfall and the icicles at the top stay.
+            wins = [TrackedWindow(id: 50, frame: screen)]
+            menuBars = []
+            fullscreen = true
+            for _ in 0..<90 { tick() }
+            frame = capture(sim)
         }
+
+        guard let img = image(frame, renderer: renderer, scale: 2, background: { ctx in
+            if fullscreen {
+                drawVideoApp(ctx)
+            } else {
+                drawDesktop(ctx, windows: wins, christmas: scene.christmas, temperature: scene.temperature)
+            }
+        }, foreground: { ctx in
+            if let c = cursor { drawCursor(ctx, at: c) }
+        }) else { print("render failed: \(scene.name)"); return }
+        if crops.isEmpty {
+            Snapshot.savePNG(img, "\(dir)/\(scene.name).png")
+        } else {
+            for (name, r) in crops { Snapshot.savePNG(img.cropping(to: pixelRect(r, scale: 2)), "\(dir)/\(name).png") }
+        }
+    }
+
+    /// A region in points (origin bottom left) as a pixel rectangle of an image (origin top left).
+    static func pixelRect(_ r: CGRect, scale: CGFloat) -> CGRect {
+        CGRect(x: r.minX * scale, y: (size.height - r.maxY) * scale, width: r.width * scale, height: r.height * scale)
+    }
+
+    /// Renders a frame over `background` (and under `foreground`) at the given scale.
+    static func image(_ f: Frame, renderer: Renderer, scale: Int, background: (CGContext) -> Void,
+                      foreground: (CGContext) -> Void = { _ in }) -> CGImage? {
+        let w = Int(size.width) * scale, h = Int(size.height) * scale
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+        d.usage = [.renderTarget]
+        d.storageMode = .shared
+        guard let tex = renderer.device.makeTexture(descriptor: d) else { return nil }
+        renderer.render(to: tex, size: size, particles: f.particles, mesh: f.mesh)
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        tex.getBytes(&px, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let info = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        guard let snow = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                   space: cs, bitmapInfo: info)?.makeImage(),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: cs, bitmapInfo: info) else { return nil }
+        ctx.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+        background(ctx)
+        ctx.draw(snow, in: CGRect(origin: .zero, size: size))
+        foreground(ctx)
+        return ctx.makeImage()
+    }
+
+    /// The drawn desktop as an image (drawn once for all frames of the GIF).
+    static func desktopImage(windows: [TrackedWindow], christmas: Bool, temperature: Double, scale: CGFloat) -> CGImage {
+        let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
+                            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.scaleBy(x: scale, y: scale)
+        drawDesktop(ctx, windows: windows, christmas: christmas, temperature: temperature)
+        return ctx.makeImage()!
+    }
+
+    static func writeGIF(_ frames: [CGImage], path: String, delay: Double) {
+        guard !frames.isEmpty,
+              let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.gif.identifier as CFString,
+                                                         frames.count, nil) else { return }
+        let loop = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary
+        CGImageDestinationSetProperties(dest, loop)
+        let props = [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay]] as CFDictionary
+        for f in frames { CGImageDestinationAddImage(dest, f, props) }
+        if CGImageDestinationFinalize(dest) { print("gif \(frames.count) frames: \(path)") }
+    }
+
+    // MARK: Finding things in a frame (by their exact colours)
+
+    /// The top of the snow at the bottom of the screen or on the Dock near x (drift columns use the snow material).
+    static func surface(_ mesh: [Vertex], x: Float) -> Float {
+        var top: Float = Float(dock.minX)...Float(dock.maxX) ~= x ? Float(dock.maxY) : 0
+        for v in mesh where v.r >= 2048 && v.r < 4096 && v.y < 160 && abs(v.x - x) <= 4 { top = max(top, v.y) }
+        return top
+    }
+
+    /// The snowplow's position: the centre of its orange trim.
+    static func plowX(_ mesh: [Vertex]) -> Float? {
+        var sum: Float = 0, n: Float = 0
+        for v in mesh where abs(v.r - 0.72) < 0.002 && abs(v.g - 0.4) < 0.002 && abs(v.b - 0.05) < 0.002 { sum += v.x; n += 1 }
+        return n > 0 ? sum / n : nil
+    }
+
+    /// How good a skier picture is: one point per skier in the region, three more if one of them is in the air.
+    static func skierScore(_ mesh: [Vertex], region: CGRect) -> Double {
+        var score = 0.0, air = 0.0
+        for g in skierGroups(mesh) {
+            let cx = g.map(\.x).reduce(0, +) / Float(g.count)
+            guard cx > Float(region.minX) + 30, cx < Float(region.maxX) - 30 else { continue }
+            score += 1
+            let low = g.map(\.y).min() ?? 0
+            let height = low - surface(mesh, x: cx)
+            if height > 34 { air = max(air, 3 + Double(min(1, (height - 34) / 40))) }
+        }
+        return score + air
+    }
+
+    /// The centres of the skiers on screen, from left to right.
+    static func skierXs(_ mesh: [Vertex]) -> [Float] {
+        skierGroups(mesh).map { g in g.map(\.x).reduce(0, +) / Float(g.count) }
+    }
+
+    /// The skiers' jacket vertices, one group per skier.
+    static func skierGroups(_ mesh: [Vertex]) -> [[(x: Float, y: Float)]] {
+        let jackets: [(Float, Float, Float)] = [(0.9, 0.16, 0.2), (0.16, 0.45, 0.95), (1, 0.55, 0.1),
+                                                (0.14, 0.68, 0.36), (0.6, 0.3, 0.86), (0.98, 0.78, 0.12)]
+        var pts: [(x: Float, y: Float)] = []
+        for v in mesh where v.y < 300 && jackets.contains(where: { abs($0.0 - v.r) < 0.002 && abs($0.1 - v.g) < 0.002 && abs($0.2 - v.b) < 0.002 }) {
+            pts.append((v.x, v.y))
+        }
+        pts.sort { $0.x < $1.x }
+        var groups: [[(x: Float, y: Float)]] = []
+        for p in pts {
+            if let last = groups.last?.last, p.x - last.x < 20 { groups[groups.count - 1].append(p) } else { groups.append([p]) }
+        }
+        return groups
     }
 
     // MARK: Drawing helpers
@@ -305,21 +524,97 @@ enum Promo {
         text("Thu 24 Dec  9:41", CGPoint(x: 1290, y: y), size: 13.5, weight: .medium, color: .white)
     }
 
+    /// A video player in full screen: a mountain sunset with the playback controls.
+    static func drawVideoApp(_ ctx: CGContext) {
+        let nsctx = NSGraphicsContext(cgContext: ctx, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = nsctx
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        gradient(ctx, [rgb(0.16, 0.12, 0.34), rgb(0.62, 0.30, 0.48), rgb(0.98, 0.58, 0.36), rgb(1, 0.82, 0.55)],
+                 from: CGPoint(x: 0, y: size.height), to: CGPoint(x: 0, y: 280))
+        let sun = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                             colors: [rgb(1, 0.95, 0.75, 1), rgb(1, 0.85, 0.5, 0.5), rgb(1, 0.7, 0.4, 0)] as CFArray,
+                             locations: [0, 0.25, 1])!
+        ctx.drawRadialGradient(sun, startCenter: CGPoint(x: 900, y: 330), startRadius: 0,
+                               endCenter: CGPoint(x: 900, y: 330), endRadius: 420, options: [])
+        func ridge(_ base: CGFloat, _ amp: CGFloat, _ seed: CGFloat, _ color: CGColor) {
+            let p = CGMutablePath()
+            p.move(to: CGPoint(x: 0, y: 0))
+            var x: CGFloat = 0
+            while x <= size.width {
+                let y = base + amp * (0.6 * sin(x / 210 + seed) + 0.28 * sin(x / 77 + seed * 1.7) + 0.12 * sin(x / 29 + seed))
+                p.addLine(to: CGPoint(x: x, y: y))
+                x += 6
+            }
+            p.addLine(to: CGPoint(x: size.width, y: 0))
+            p.closeSubpath()
+            ctx.addPath(p)
+            ctx.setFillColor(color)
+            ctx.fillPath()
+        }
+        ridge(330, 110, 0.4, rgb(0.42, 0.24, 0.42, 0.9))
+        ridge(240, 80, 2.2, rgb(0.24, 0.14, 0.30, 1))
+        ridge(130, 50, 4.1, rgb(0.11, 0.07, 0.17, 1))
+        // Playback controls
+        let bar = CGRect(x: 320, y: 46, width: 800, height: 92)
+        ctx.saveGState()
+        ctx.addPath(rounded(ctx, bar, 22))
+        ctx.setFillColor(rgb(0.08, 0.08, 0.1, 0.55))
+        ctx.fillPath()
+        ctx.restoreGState()
+        symbol("backward.fill", in: CGRect(x: bar.midX - 92, y: bar.maxY - 44, width: 34, height: 22), color: .white)
+        symbol("pause.fill", in: CGRect(x: bar.midX - 16, y: bar.maxY - 48, width: 32, height: 30), color: .white)
+        symbol("forward.fill", in: CGRect(x: bar.midX + 58, y: bar.maxY - 44, width: 34, height: 22), color: .white)
+        symbol("speaker.wave.2.fill", in: CGRect(x: bar.minX + 26, y: bar.maxY - 44, width: 26, height: 20), color: .white)
+        symbol("pip.enter", in: CGRect(x: bar.maxX - 54, y: bar.maxY - 44, width: 26, height: 20), color: .white)
+        let track = CGRect(x: bar.minX + 84, y: bar.minY + 20, width: bar.width - 168, height: 5)
+        ctx.addPath(rounded(ctx, track, 2.5))
+        ctx.setFillColor(rgb(1, 1, 1, 0.3))
+        ctx.fillPath()
+        ctx.addPath(rounded(ctx, CGRect(x: track.minX, y: track.minY, width: track.width * 0.38, height: track.height), 2.5))
+        ctx.setFillColor(rgb(1, 1, 1, 0.95))
+        ctx.fillPath()
+        text("0:41:12", CGPoint(x: bar.minX + 22, y: bar.minY + 14), size: 12.5, weight: .medium, color: .white)
+        text("−1:07:48", CGPoint(x: bar.maxX - 76, y: bar.minY + 14), size: 12.5, weight: .medium, color: .white)
+    }
+
+    /// The macOS arrow cursor with its tip at p.
+    static func drawCursor(_ ctx: CGContext, at p: CGPoint) {
+        let pts: [CGPoint] = [(0, 0), (0, -17), (4.2, -13), (7, -19.6), (9.6, -18.5), (6.9, -12.2), (12.3, -12.2)]
+            .map { CGPoint(x: p.x + $0.0 * 1.1, y: p.y + $0.1 * 1.1) }
+        let path = CGMutablePath()
+        path.addLines(between: pts)
+        path.closeSubpath()
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -1.5), blur: 3, color: rgb(0, 0, 0, 0.35))
+        ctx.addPath(path)
+        ctx.setStrokeColor(rgb(1, 1, 1))
+        ctx.setLineWidth(2.4)
+        ctx.setLineJoin(.round)
+        ctx.strokePath()
+        ctx.restoreGState()
+        ctx.addPath(path)
+        ctx.setFillColor(rgb(0, 0, 0))
+        ctx.fillPath()
+    }
+
     // MARK: Settings window
 
     static func renderSettings(dir: String, delegate: AppDelegate) {
         var cfg = SimConfig()
         cfg.christmas = true
         let preview = Settings(preview: cfg)
-        let tabs = [(0, "settings-snowfall"), (1, "settings-drifts"), (2, "settings-snowman"), (3, "settings-christmas")]
+        let tabs = [(0, "settings-snowfall"), (1, "settings-drifts"), (2, "settings-snowman"), (3, "settings-christmas"),
+                    (4, "settings-other")]
         var pending = tabs.count
         for (idx, (tab, name)) in tabs.enumerated() {
             let host = NSHostingView(rootView: SettingsView(settings: preview, delegate: delegate, tab: tab, activates: false)
                 .environment(\.colorScheme, .light)
                 .environment(\.controlActiveState, .key))
             host.appearance = NSAppearance(named: .aqua)
-            let fit = host.fittingSize
-            host.frame = CGRect(x: 0, y: 0, width: 500, height: max(420, fit.height))
+            // A grouped form scrolls – make the window tall enough to show the whole tab.
+            host.frame = CGRect(x: 0, y: 0, width: 500, height: 2000)
+            host.layoutSubtreeIfNeeded()
             let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
             win.appearance = NSAppearance(named: .aqua)
             win.contentView = host
@@ -327,16 +622,38 @@ enum Promo {
             win.orderFrontRegardless()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 host.layoutSubtreeIfNeeded()
-                if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                    host.cacheDisplay(in: host.bounds, to: rep)
-                    if let cg = rep.cgImage { composeWindow(cg, size: host.bounds.size, path: "\(dir)/\(name).png") }
+                // Measure the form's content and shrink the window to it.
+                let content = contentHeight(host) ?? max(420, host.fittingSize.height)
+                win.setContentSize(CGSize(width: 500, height: content))
+                host.frame = CGRect(x: 0, y: 0, width: 500, height: content)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    host.layoutSubtreeIfNeeded()
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        if let cg = rep.cgImage { composeWindow(cg, size: host.bounds.size, path: "\(dir)/\(name).png") }
+                    }
+                    win.orderOut(nil)
+                    print("settings \(name): \(Int(content)) pt")
+                    pending -= 1
+                    if pending == 0 { exit(0) }
                 }
-                win.orderOut(nil)
-                print("settings \(name)")
-                pending -= 1
-                if pending == 0 { exit(0) }
             }
         }
+    }
+
+    /// Height the window needs to show the whole scrolling form: the scroll view's document height plus
+    /// everything above the scroll view (the tab bar).
+    static func contentHeight(_ host: NSView) -> CGFloat? {
+        func find(_ v: NSView) -> NSScrollView? {
+            if let s = v as? NSScrollView, s.documentView != nil { return s }
+            for c in v.subviews { if let s = find(c) { return s } }
+            return nil
+        }
+        guard let scroll = find(host), let doc = scroll.documentView else { return nil }
+        let inHost = scroll.convert(scroll.bounds, to: host)
+        let above = host.isFlipped ? inHost.minY : host.bounds.height - inHost.maxY
+        let below = host.isFlipped ? host.bounds.height - inHost.maxY : inHost.minY
+        return ceil(above + below + doc.frame.height + scroll.contentInsets.top + scroll.contentInsets.bottom)
     }
 
     /// Put the settings content into a window frame on a soft winter background.

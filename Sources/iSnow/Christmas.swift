@@ -28,10 +28,18 @@ enum Christmas {
         style == .warmWhite ? warm : palette[i % palette.count]
     }
 
-    static func bulb(_ out: inout [Vertex], x: Float, y: Float, r: Float, color c: RGBA, b: Float, alpha: Float) {
+    /// Light size and glow from the settings (set by the simulation before drawing).
+    nonisolated(unsafe) static var bulbScale: Float = 1
+    nonisolated(unsafe) static var glow: Float = 1
+
+    static func bulb(_ out: inout [Vertex], x: Float, y: Float, r rIn: Float, color c: RGBA, b bIn: Float, alpha: Float) {
+        let r = rIn * bulbScale
+        let b = bIn * min(1, 0.35 + 0.65 * glow)          // dimmer bulbs when the glow is turned down
         // glow
-        Mesh.circle(&out, cx: x, cy: y, r: r * 3.2, center: (c.0, c.1, c.2, 0.45 * b * alpha),
-                    rim: (c.0, c.1, c.2, 0), segments: 14)
+        if glow > 0.02 {
+            Mesh.circle(&out, cx: x, cy: y, r: r * (2.2 + 1.1 * glow), center: (c.0, c.1, c.2, min(1, 0.45 * bIn * alpha * glow)),
+                        rim: (c.0, c.1, c.2, 0), segments: 14)
+        }
         // bulb
         let lit: RGBA = (c.0 * (0.45 + 0.55 * b) + 0.25 * b, c.1 * (0.45 + 0.55 * b) + 0.25 * b,
                          c.2 * (0.45 + 0.55 * b) + 0.25 * b, alpha)
@@ -44,7 +52,8 @@ enum Christmas {
     /// `skip(x)` hides the part of the garland behind an open menu.
     static func garland(_ out: inout [Vertex], width W: Float, y top: Float, t: Float, style: LightStyle,
                         skip: (Float) -> Bool = { _ in false }) {
-        let span: Float = 150, sag: Float = 11, spacing: Float = 19
+        let k = bulbScale
+        let span: Float = 150, sag: Float = 11 * (0.6 + 0.4 * k), spacing: Float = 19 * max(0.7, k)
         let wire: RGBA = (0.12, 0.2, 0.12, 0.9)
         var x0: Float = 0
         var bulbIndex = 0
@@ -66,7 +75,7 @@ enum Christmas {
             var x = x0 + spacing * 0.5
             while x < x1 - 4 {
                 if skip(x) { bulbIndex += 1; x += spacing; continue }
-                let y = yAt(x) - 3.5
+                let y = yAt(x) - 3.5 * k
                 let c = bulbColor(bulbIndex, style: style)
                 Mesh.line(&out, (x, yAt(x)), (x, y + 2), width: 1, color: wire)
                 bulb(&out, x: x, y: y, r: 2.6, color: c, b: brightness(bulbIndex, t, style: style), alpha: 1)
