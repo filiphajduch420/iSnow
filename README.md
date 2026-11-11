@@ -68,7 +68,7 @@ Line Tools (Swift 6):
 ```sh
 git clone https://github.com/filiphajduch420/iSnow.git
 cd iSnow
-./build.sh --install     # builds iSnow.app, copies it to ~/Applications and launches it
+./build.sh --install     # builds and signs iSnow.app, copies it to ~/Applications and launches it
 ```
 
 `./build.sh` without arguments only builds `build/iSnow.app`.
@@ -95,10 +95,14 @@ cd iSnow
 4. Confirm with Touch ID or your password. Within a second the snowmen line up along the whole Dock
    and snow starts settling on your desktop icons – no restart needed.
 
-**After rebuilding the app:** iSnow is signed ad hoc, so every new build looks like a different app to
-macOS and the switch may stop working even though it still shows as on. Select **iSnow** in the
-list, remove it with **−**, and add it again (step 3). If you used an older version called *Vločka*,
-you can remove that entry too.
+**After rebuilding the app:** `build.sh` signs iSnow with your *Apple Development* certificate if you
+have one (any free Apple ID signed in to Xcode gives you one) – then macOS keeps the permission
+across rebuilds. Without a certificate the app is signed ad hoc, every build looks like a different
+app to macOS, and the switch can stop working even though it still shows as on. In that case select
+**iSnow** in the list, remove it with **−**, and add it again (step 3). If you used an older version
+called *Vločka*, you can remove that entry too.
+
+The menu shows *Dock position is estimated* while iSnow doesn't have the permission.
 
 ## Performance
 

@@ -45,7 +45,8 @@ struct MenuContent: View {
         Toggle("Snowman", isOn: $settings.config.snowman)
         Toggle("Christmas Mode", isOn: $settings.config.christmas)
         Toggle("Cursor Scatters Snow", isOn: $settings.config.mouse)
-        if !settings.axTrusted && (settings.config.onDock || settings.config.onIcons) {
+        if !settings.axTrusted && (settings.config.onDock || settings.config.onIcons || settings.config.snowman) {
+            Text("Dock position is estimated")
             Button("Allow Snow on the Dock and Icons…") { Tracker.requestAccessibility() }
         }
         Divider()
