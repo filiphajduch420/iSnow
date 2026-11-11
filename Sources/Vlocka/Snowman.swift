@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// Sněhulák na Docku: přikutálí koule, postaví se, obleče šálu, mává, hází koule,
-/// po čase se rozpadne a roztaje. Kliknutím do něj ho rozbíjíš.
+/// Snowman on the Dock: rolls in its balls, stacks them, puts on a scarf, waves, throws snowballs,
+/// and after a while falls apart and melts. Clicking it knocks it apart.
 struct Snowman {
     enum Phase { case absent, rolling, dressing, standing, collapsing, melting }
 
@@ -36,7 +36,7 @@ struct Snowman {
 
     static let rollTime: Float = 1.8
 
-    // MARK: Geometrie
+    // MARK: Geometry
 
     func stackY(_ k: Int) -> Float {
         let r = [R(0), R(1), R(2)]
@@ -47,7 +47,7 @@ struct Snowman {
         return y1 + r[1] * 0.8 + r[2] * 0.85
     }
 
-    /// Poloha a poloměr koule k (bere v úvahu kutálení při stavbě).
+    /// Position and radius of ball k (accounts for rolling while building).
     func ball(_ k: Int) -> (x: Float, y: Float, r: Float)? {
         guard k < levels else { return nil }
         let r = R(k)
@@ -92,9 +92,9 @@ struct Snowman {
         }
     }
 
-    // MARK: Krok
+    // MARK: Step
 
-    /// Vrací true, když chce sněhulák hodit kouli.
+    /// Returns true when the snowman wants to throw a snowball.
     mutating func step(dt: Float, debris: inout [Debris], shards: inout [Shard]) -> Bool {
         t += dt
         wobble = max(0, wobble - dt * 1.8)
@@ -127,7 +127,7 @@ struct Snowman {
             if t >= 6 { reset(next: rebuildDelay * .random(in: 0.7...1.3)) }
         }
 
-        // Volné koule a mrkev
+        // Loose balls and the carrot
         var i = 0
         while i < loose.count {
             var b = loose[i]
@@ -203,7 +203,7 @@ struct Snowman {
         }
     }
 
-    /// Klik do sněhuláka. Vrací true, když se brání (hodí kouli).
+    /// A click on the snowman. Returns true when it fights back (throws a snowball).
     mutating func hit(at p: SIMD2<Float>, debris: inout [Debris]) -> Bool {
         guard phase == .standing || phase == .dressing else { return false }
         hits += 1
@@ -227,7 +227,7 @@ struct Snowman {
         carrot = nil
     }
 
-    // MARK: Kreslení
+    // MARK: Drawing
 
     func build(into out: inout [Vertex]) {
         let center: RGBA = (1, 1, 1, 1)
@@ -237,7 +237,7 @@ struct Snowman {
         let s = sizeScale
 
         if phase != .absent {
-            // Ruce za tělem
+            // Arms behind the body
             if dress > 0, levels >= 2, let m = ball(1) {
                 let a = brown.3 * dress
                 let col: RGBA = (brown.0, brown.1, brown.2, a)
@@ -259,18 +259,18 @@ struct Snowman {
             if dress > 0 {
                 let a = dress
                 if levels >= 2, let m = ball(1) {
-                    // knoflíky
+                    // buttons
                     Mesh.disc(&out, cx: m.x, cy: m.y + 2.5 * s, r: 1.2 * s, color: (dark.0, dark.1, dark.2, a))
                     Mesh.disc(&out, cx: m.x, cy: m.y - 2.5 * s, r: 1.2 * s, color: (dark.0, dark.1, dark.2, a))
                 }
                 if levels >= 3, let h = ball(2), let m = ball(1) {
-                    // šála
+                    // scarf
                     let red: RGBA = (0.85, 0.17, 0.22, a)
                     let neckY = (h.y - h.r * 0.75 + m.y + m.r * 0.75) / 2
                     Mesh.rect(&out, x: m.x - m.r * 0.78, y: neckY - 1.8 * s, w: m.r * 1.56, h: 3.6 * s, top: red, bottom: (0.7, 0.1, 0.16, a))
                     let sway = sin(t * 2.2) * 1.2 * s
                     Mesh.line(&out, (m.x + m.r * 0.45, neckY), (m.x + m.r * 0.62 + sway, neckY - 9 * s), width: 3 * s, color: red)
-                    // oči a pusa
+                    // eyes and mouth
                     Mesh.disc(&out, cx: h.x - 2.4 * s, cy: h.y + 1.8 * s, r: 1.05 * s, color: (dark.0, dark.1, dark.2, a))
                     Mesh.disc(&out, cx: h.x + 2.2 * s, cy: h.y + 1.8 * s, r: 1.05 * s, color: (dark.0, dark.1, dark.2, a))
                     for k in 0..<3 {

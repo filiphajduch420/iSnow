@@ -1,0 +1,78 @@
+/* Menu */
+"Snowing" = "Sněží";
+"Intensity" = "Intenzita";
+"Snow on Windows" = "Sníh na oknech";
+"Snowman" = "Sněhulák";
+"Cursor Scatters Snow" = "Kurzor rozhání sníh";
+"Allow Snow on the Dock and Icons…" = "Povolit sníh na Docku a ikonách…";
+"Shake Off All Snow" = "Setřást všechen sníh";
+"Settings…" = "Nastavení…";
+"Quit Vločka" = "Ukončit Vločku";
+
+/* Presets */
+"Flurry" = "Poprašek";
+"Normal" = "Normální";
+"Blizzard" = "Vánice";
+"Snowstorm" = "Kalamita";
+"Custom" = "Vlastní";
+
+/* Tabs */
+"Snowfall" = "Sněžení";
+"Drifts" = "Závěje";
+"Other" = "Ostatní";
+
+/* Snowfall */
+"Preset" = "Předvolba";
+"Snowfall density" = "Hustota sněžení";
+"Max flakes" = "Max. počet vloček";
+"Flakes" = "Vločky";
+"Size" = "Velikost";
+"Fall speed" = "Rychlost padání";
+"Wind" = "Vítr";
+"calm" = "bezvětří";
+"Sparkling flakes" = "Třpytivé vločky";
+"Snow color" = "Barva sněhu";
+"White" = "Bílá";
+
+/* Drifts */
+"Where snow settles" = "Kde se sníh drží";
+"On windows" = "Na oknech";
+"On the Dock" = "Na Docku";
+"On desktop icons" = "Na ikonách plochy";
+"On the menu bar" = "Na liště menu";
+"The Dock and desktop icons need Accessibility permission." = "Dock a ikony plochy potřebují oprávnění Zpřístupnění.";
+"Allow…" = "Povolit…";
+"Height on windows" = "Výška na oknech";
+"Height at the bottom edge" = "Výška u spodního okraje";
+"Pile-up speed" = "Rychlost přibývání";
+"Melting" = "Tání";
+"off" = "netaje";
+"%lld pt/min" = "%lld b/min";
+"%lld pt" = "%lld b";
+"Icicles" = "Rampouchy";
+"Icicles under windows and the menu bar" = "Rampouchy pod okny a lištou menu";
+"Length" = "Délka";
+
+/* Snowman */
+"Build a snowman on the Dock" = "Stavět sněhuláka na Docku";
+"Break between snowmen" = "Pauza mezi sněhuláky";
+"%lld s" = "%lld s";
+"%lld min" = "%lld min";
+"Build Now" = "Postavit hned";
+"Snowball fight" = "Koulovačka";
+"The snowman throws snowballs at windows and icons" = "Sněhulák hází koule na okna a ikony";
+"Throws roughly every" = "Hází zhruba každých";
+"Click the snowman – every third hit knocks off a level. Sometimes it fights back." = "Klikni na sněhuláka – každý třetí zásah shodí jedno patro. Někdy se brání.";
+
+/* Other */
+"Extras" = "Vychytávky";
+"The cursor scatters flakes and a quick swipe brushes snow off" = "Kurzor rozhání vločky a rychlým tahem shrnuje sníh";
+"Frosted screen edges" = "Ojíněné okraje obrazovky";
+"Don't snow over full-screen apps" = "Nesněžit přes aplikace na celé obrazovce";
+"Performance" = "Výkon";
+"Frame rate" = "Snímková frekvence";
+"30 fps (power saving)" = "30 fps (úsporné)";
+"Low Power Mode always caps the frame rate at 30 fps. When nothing is falling, rendering stops." = "V režimu nízké spotřeby se frekvence vždy sníží na 30 fps. Když nic nepadá, vykreslování stojí.";
+"General" = "Obecné";
+"Launch at login" = "Spouštět po přihlášení";
+"Restore Defaults" = "Obnovit výchozí nastavení";

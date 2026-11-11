@@ -2,7 +2,7 @@ import Foundation
 
 typealias RGBA = (Float, Float, Float, Float)
 
-/// Pomocné funkce pro skládání trojúhelníků (vše v bodech, y nahoru).
+/// Helpers for building triangles (all in points, y up).
 enum Mesh {
     nonisolated(unsafe) static var tint: (Float, Float, Float) = (1, 1, 1)
     static var snowTop: RGBA { (tint.0, tint.1, tint.2, 0.97) }
@@ -27,14 +27,14 @@ enum Mesh {
         (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t, a.3 + (b.3 - a.3) * t)
     }
 
-    /// Sloupec závěje: dva lichoběžníky se svislým přechodem barvy (dole namodralý stín).
+    /// One drift column: two trapezoids with a vertical gradient (bluish shade at the bottom).
     static func snowColumn(_ out: inout [Vertex], l: Float, m: Float, r: Float, base: Float,
                            hl: Float, hm: Float, hr: Float) {
         let top = snowTop, bot = snowBase
-        // levá polovina
+        // left half
         v(&out, l, base, bot); v(&out, m, base, bot); v(&out, m, base + hm, top)
         v(&out, l, base, bot); v(&out, m, base + hm, top); v(&out, l, base + hl, top)
-        // pravá polovina
+        // right half
         v(&out, m, base, bot); v(&out, r, base, bot); v(&out, r, base + hr, top)
         v(&out, m, base, bot); v(&out, r, base + hr, top); v(&out, m, base + hm, top)
     }
@@ -44,20 +44,20 @@ enum Mesh {
         v(&out, x, y, bottom); v(&out, x + w, y + h, top); v(&out, x, y + h, top)
     }
 
-    /// Rampouch visící z hrany `top` dolů.
+    /// Icicle hanging down from the `top` edge.
     static func icicle(_ out: inout [Vertex], x: Float, top: Float, len: Float, width: Float, alpha: Float) {
         let w = min(width, 2 + len * 0.3)
         let root: RGBA = (0.93, 0.97, 1, alpha)
         let tip: RGBA = (0.70, 0.84, 1, alpha * 0.55)
         let hi: RGBA = (1, 1, 1, alpha)
         v(&out, x - w / 2, top, root); v(&out, x + w / 2, top, root); v(&out, x, top - len, tip)
-        // odlesk
+        // highlight
         v(&out, x - w * 0.25, top, hi); v(&out, x - w * 0.05, top, hi); v(&out, x - w * 0.08, top - len * 0.6, (1, 1, 1, 0))
     }
 
-    /// Koule se stínováním – vějíř od světlejšího středu k namodralému okraji.
+    /// Shaded ball – a fan from a lighter centre to a bluish rim.
     static func circle(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, center: RGBA, rim: RGBA, segments: Int = 28) {
-        let ox = cx - r * 0.25, oy = cy + r * 0.25        // světlo zleva shora
+        let ox = cx - r * 0.25, oy = cy + r * 0.25        // light from the top left
         var prev = (cx + r, cy)
         for s in 1...segments {
             let a = Float(s) / Float(segments) * 2 * .pi
@@ -71,7 +71,7 @@ enum Mesh {
         circle(&out, cx: cx, cy: cy, r: r, center: color, rim: color, segments: 12)
     }
 
-    /// Tlustá úsečka (ruce sněhuláka).
+    /// Thick line segment (snowman arms).
     static func line(_ out: inout [Vertex], _ a: (Float, Float), _ b: (Float, Float), width: Float, color: RGBA) {
         let dx = b.0 - a.0, dy = b.1 - a.1
         let len = max(0.001, (dx * dx + dy * dy).squareRoot())

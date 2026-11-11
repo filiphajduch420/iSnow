@@ -2,9 +2,9 @@ import CoreGraphics
 import Foundation
 import QuartzCore
 
-/// Vrchol trojúhelníkové sítě (závěje, rampouchy, sněhulák) – 24 B, odpovídá shaderu.
+/// Triangle mesh vertex (drifts, icicles, snowman) – 24 B, matches the shader.
 struct Vertex { var x, y, r, g, b, a: Float }
-/// Instance kulaté částice (vločka, kus sněhu, koule) – 16 B.
+/// Round particle instance (flake, snow chunk, snowball) – 16 B.
 struct Particle { var x, y, size, alpha: Float }
 
 enum SurfaceKind { case window, dock, icon, ground }
@@ -19,13 +19,13 @@ struct Debris {
     var lands: Bool
 }
 
-struct Shard {            // ulomený rampouch
+struct Shard {            // broken-off icicle
     var x, y, vy, len, width: Float
 }
 
 struct Snowball {
     var x, y, vx, vy, t, duration: Float
-    var target: Int       // klíč závěje, -999 = nic
+    var target: Int       // drift key, -999 = none
     var tx: Float
 }
 
@@ -66,7 +66,7 @@ final class Pile {
     }
 }
 
-/// Simulace sněhu pro jednu obrazovku. Souřadnice v bodech, počátek vlevo dole obrazovky.
+/// Snow simulation for one screen. Coordinates in points, origin at the screen's bottom left.
 @MainActor
 final class Simulation {
     static let binW: Float = 4
@@ -76,7 +76,7 @@ final class Simulation {
     let origin: CGPoint
     let size: CGSize
     let menuBarHeight: CGFloat
-    let dockBottomGuess: CGFloat         // horní hrana Docku dole podle visibleFrame
+    let dockBottomGuess: CGFloat         // top edge of a bottom Dock, derived from visibleFrame
     var hostsSnowman: Bool
 
     private(set) var flakes: [Flake] = []
@@ -113,9 +113,9 @@ final class Simulation {
     var W: Float { Float(size.width) }
     var H: Float { Float(size.height) }
 
-    // MARK: - Synchronizace s prostředím
+    // MARK: - Syncing with the environment
 
-    /// Vrátí true, pokud se něco změnilo a je potřeba překreslit.
+    /// Returns true when something changed and a redraw is needed.
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
               now: Double, cfg: SimConfig) -> Bool {
@@ -157,7 +157,7 @@ final class Simulation {
             return p
         }
 
-        // Okna (zepředu dozadu); okno je zakryté okny před ním.
+        // Windows (front to back); a window is occluded by the windows in front of it.
         var front: [CGRect] = localOcc
         for w in windows {
             let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
@@ -177,7 +177,7 @@ final class Simulation {
             if updateVisibility(p, occluders: localOcc) { changed = true }
             order.append(p)
         }
-        // Ikony plochy – leží pod všemi okny.
+        // Desktop icons – they sit below all windows.
         if cfg.onIcons {
             for f in icons {
                 let r = f.offsetBy(dx: -origin.x, dy: -origin.y)
@@ -188,7 +188,7 @@ final class Simulation {
                 order.append(p)
             }
         }
-        // Spodní okraj obrazovky
+        // Bottom edge of the screen
         let g = upsert(key: Self.groundKey, kind: .ground, rect: CGRect(x: 0, y: -1, width: size.width, height: 1))
         if updateGroundVisibility(g, dock: dockLocal) { changed = true }
         order.append(g)
@@ -234,7 +234,7 @@ final class Simulation {
             }
             if p.visible[i] != v { p.visible[i] = v; changed = true }
         }
-        // Rampouchy – spodní hrana okna
+        // Icicles – the window's bottom edge
         if p.kind == .window {
             if p.icicleVisible.count != p.icicles.count { p.icicleVisible = Array(repeating: false, count: p.icicles.count) }
             let bottom = p.rect.minY
@@ -267,7 +267,7 @@ final class Simulation {
         return changed
     }
 
-    // MARK: - Krok simulace
+    // MARK: - Simulation step
 
     func step(dt: Double, now: Double, mouse: CGPoint? = nil) {
         time += dt
@@ -285,7 +285,7 @@ final class Simulation {
         if cfg.mouse, let mouse { stepMouse(SIMD2(Float(mouse.x), Float(mouse.y)), dt: fdt) } else { lastMouse = nil }
         let acc = Float(cfg.accumulation)
 
-        // Vločky
+        // Flakes
         var i = 0
         while i < flakes.count {
             var f = flakes[i]
@@ -299,7 +299,7 @@ final class Simulation {
                 flakes.swapAt(i, flakes.count - 1); flakes.removeLast(); continue
             }
             if cfg.onMenuBar, f.depth > 0.6, oy > H - Float(menuBarHeight), f.y <= H - Float(menuBarHeight) {
-                // Prachový sníh na spodní hraně lišty menu
+                // Powder snow along the bottom edge of the menu bar
                 let b = Int(f.x / Self.binW)
                 if b >= 0 && b < menuSnow.count && menuSnow[b] < 2.2 { menuSnow[b] += 0.12; menuIceDirty = true }
             }
@@ -309,7 +309,7 @@ final class Simulation {
             i += 1
         }
 
-        // Padající kusy sněhu
+        // Falling snow chunks
         i = 0
         while i < debris.count {
             var d = debris[i]
@@ -328,7 +328,7 @@ final class Simulation {
             i += 1
         }
 
-        // Ulomené rampouchy
+        // Broken-off icicles
         i = 0
         while i < shards.count {
             shards[i].vy -= Self.gravity * fdt
@@ -336,7 +336,7 @@ final class Simulation {
             if shards[i].y + shards[i].len < -10 { shards.swapAt(i, shards.count - 1); shards.removeLast() } else { i += 1 }
         }
 
-        // Sněhové koule
+        // Snowballs
         i = 0
         while i < snowballs.count {
             var s = snowballs[i]
@@ -352,7 +352,7 @@ final class Simulation {
             i += 1
         }
 
-        // Rampouchy rostou pod okny, která se dlouho nehýbou
+        // Icicles grow under windows that stay still for a while
         meshTimer += dt
         let growTick = meshTimer > 0.25
         if growTick {
@@ -382,7 +382,7 @@ final class Simulation {
                                       rate: maxLen / Float.random(in: 50...160), width: Float.random(in: 3.5...6))
                     }
                     p.icicleVisible = Array(repeating: false, count: count)
-                    p.dirty = true          // viditelnost se dopočte při další synchronizaci
+                    p.dirty = true          // visibility is computed on the next sync
                 }
                 for k in p.icicles.indices where p.icicles[k].len < p.icicles[k].maxLen {
                     p.icicles[k].len = min(p.icicles[k].maxLen, p.icicles[k].len + p.icicles[k].rate * tick)
@@ -412,14 +412,14 @@ final class Simulation {
         if hostsSnowman { stepSnowman(dt: fdt) }
     }
 
-    /// Je potřeba dál animovat? Když ne, display link se uspí.
+    /// Does anything still need animating? If not, the display link goes to sleep.
     var isAnimating: Bool {
         if !cfg.paused && !fullscreen { return true }
         if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty { return true }
         return hostsSnowman && snowman.isMoving
     }
 
-    // MARK: - Fyzika závějí
+    // MARK: - Drift physics
 
     private func hit(x: Float, oldY: Float, newY: Float) -> (Pile, Int)? {
         for p in landables {
@@ -451,7 +451,7 @@ final class Simulation {
             }
         }
         if p.kind != .ground {
-            // Na okrajích sníh padá dolů, takže hrany jsou zaoblené.
+            // Snow falls off the edges, so the ends stay rounded.
             let e = slope * 0.8
             if p.bins[0] > e { p.bins[0] = e }
             if p.bins[n - 1] > e { p.bins[n - 1] = e }
@@ -459,7 +459,7 @@ final class Simulation {
         p.dirty = true
     }
 
-    /// Okno se pohnulo nebo zmizelo – sníh sklouzne a rampouchy se ulomí.
+    /// A window moved or disappeared – the snow slides off and icicles snap.
     private func shake(_ p: Pile, push: Float) {
         let n = p.bins.count
         var spawned = 0
@@ -515,7 +515,7 @@ final class Simulation {
                             sparkle: cfg.sparkle && Float.random(in: 0...1) < 0.18))
     }
 
-    /// Kurzor rozhání vločky; rychlým tahem přes závěj ji shrne dolů.
+    /// The cursor scatters flakes; a fast swipe across a drift knocks it down.
     private func stepMouse(_ m: SIMD2<Float>, dt: Float) {
         defer { lastMouse = m }
         guard let last = lastMouse, dt > 0 else { return }
@@ -551,7 +551,7 @@ final class Simulation {
         }
     }
 
-    // MARK: - Sněhulák
+    // MARK: - Snowman
 
     private func placeSnowman(dock: CGRect?) {
         if let d = dock, d.minY < size.height / 2 {
@@ -602,7 +602,7 @@ final class Simulation {
 
     func buildSnowmanNow() { if hostsSnowman { snowman.buildNow() } }
 
-    // MARK: - Výstup pro renderer
+    // MARK: - Output for the renderer
 
     func buildParticles(into out: inout [Particle]) {
         let t = Float(time)
@@ -641,7 +641,7 @@ final class Simulation {
         var i = 0
         while i < n {
             if !p.visible[i] || p.bins[i] < 0.25 { i += 1; continue }
-            // Hladký vrch: výška na hranici přihrádek = průměr sousedů.
+            // Smooth top: height at a bin boundary = average of the neighbours.
             let l = x0 + Float(i) * bw, r = l + bw
             let hl = (i > 0 && p.visible[i - 1]) ? (h(i - 1) + h(i)) * 0.5 : 0
             let hr = (i < n - 1 && p.visible[i + 1]) ? (h(i) + h(i + 1)) * 0.5 : 0

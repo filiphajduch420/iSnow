@@ -1,17 +1,17 @@
 import AppKit
 import ApplicationServices
 
-/// Okno jiné aplikace v globálních souřadnicích Cocoa (počátek vlevo dole hlavní obrazovky).
+/// Another app's window in global Cocoa coordinates (origin at the main screen's bottom left).
 struct TrackedWindow: Sendable {
     let id: Int
     let frame: CGRect
 }
 
-/// Zjišťuje, kde jsou okna, Dock a ikony na ploše. Čte jen polohy, nikdy obsah.
+/// Finds where windows, the Dock and desktop icons are. Reads positions only, never contents.
 @MainActor
 final class Tracker {
-    private(set) var windows: [TrackedWindow] = []      // zepředu dozadu
-    private(set) var overlayOccluders: [CGRect] = []     // menu, popovery, notifikace…
+    private(set) var windows: [TrackedWindow] = []      // front to back
+    private(set) var overlayOccluders: [CGRect] = []     // menus, popovers, notifications…
     private(set) var dockFrame: CGRect?
     private(set) var icons: [CGRect] = []
     private var axBusy = false
@@ -19,7 +19,7 @@ final class Tracker {
 
     static var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
 
-    /// Levný dotaz na okna (CGWindowList, bez oprávnění), volá se ~8× za sekundu.
+    /// Cheap window query (CGWindowList, no permission needed), called ~8× per second.
     func refreshWindows() {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                     kCGNullWindowID) as? [[String: Any]] else { return }
@@ -47,7 +47,7 @@ final class Tracker {
         overlayOccluders = occ
     }
 
-    /// Dock a ikony plochy přes Zpřístupnění – mimo hlavní vlákno, jednou za sekundu.
+    /// Dock and desktop icons via Accessibility – off the main thread, once per second.
     func refreshAX(wantDock: Bool, wantIcons: Bool, done: @escaping @MainActor () -> Void) {
         Settings.shared.axTrusted = AXIsProcessTrusted()
         guard Settings.shared.axTrusted, wantDock || wantIcons, !axBusy else {
@@ -109,7 +109,7 @@ enum AXProbe {
         return el
     }
 
-    /// Rámeček lišty Docku (seznam ikon).
+    /// Frame of the Dock's icon list.
     nonisolated static func dockFrame(primaryHeight h: CGFloat) -> CGRect? {
         guard let dock = app("com.apple.dock") else { return nil }
         for c in children(dock) where role(c) == (kAXListRole as String) {
@@ -118,7 +118,7 @@ enum AXProbe {
         return nil
     }
 
-    /// Ikony na ploše (Finder → oblast plochy → ikony).
+    /// Desktop icons (Finder → desktop area → icons).
     nonisolated static func desktopIcons(primaryHeight h: CGFloat) -> [CGRect] {
         guard let finder = app("com.apple.finder") else { return [] }
         var out: [CGRect] = []
@@ -129,7 +129,7 @@ enum AXProbe {
                     let r = role(it)
                     guard r == (kAXImageRole as String) || r == (kAXButtonRole as String) || r == (kAXGroupRole as String),
                           var f = frame(it, primaryHeight: h), f.width > 16, f.width < 260 else { continue }
-                    // Horní hrana obrázku ikony (bez popisku) – ikona je zhruba čtverec nahoře.
+                    // Top edge of the icon image (without the label) – roughly a square at the top.
                     let side = min(f.width, f.height) * 0.72
                     f = CGRect(x: f.midX - side / 2, y: f.maxY - side, width: side, height: side)
                     out.append(f)

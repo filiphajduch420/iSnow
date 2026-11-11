@@ -7,7 +7,7 @@ final class MetalView: NSView {
     var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 }
 
-/// Průhledné okno přes celou obrazovku, kterým procházejí kliknutí.
+/// Transparent full-screen window; all clicks pass through it.
 @MainActor
 final class Overlay: NSObject {
     let screenID: CGDirectDisplayID
@@ -94,7 +94,7 @@ final class Overlay: NSObject {
     }
 }
 
-/// Malý panel přesně nad sněhulákem – jediné místo, které chytá kliknutí.
+/// Small panel right above the snowman – the only place that catches clicks.
 @MainActor
 final class SnowmanPanel {
     private let panel: NSPanel
@@ -103,7 +103,7 @@ final class SnowmanPanel {
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isOpaque = false
-        panel.backgroundColor = NSColor(white: 1, alpha: 0.002)   // téměř průhledné, ale klikatelné
+        panel.backgroundColor = NSColor(white: 1, alpha: 0.002)   // almost transparent, but still clickable
         panel.hasShadow = false
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.overlayWindow)) + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
@@ -115,7 +115,7 @@ final class SnowmanPanel {
         panel.contentView = v
     }
 
-    /// `rect` v globálních souřadnicích, nil = schovat.
+    /// `rect` in global coordinates, nil = hide.
     func update(_ rect: CGRect?) {
         guard let rect else {
             if panel.isVisible { panel.orderOut(nil) }

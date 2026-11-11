@@ -1,8 +1,8 @@
 import Metal
 import QuartzCore
 
-/// Minimalistický Metal renderer: jedno instancované volání pro všechny částice
-/// a jedno pro trojúhelníky (závěje, rampouchy, sněhulák). Shadery se kompilují ze zdroje.
+/// Minimal Metal renderer: one instanced draw call for all particles
+/// and one for triangles (drifts, icicles, snowman). Shaders are compiled from source.
 @MainActor
 final class Renderer {
     let device: MTLDevice
@@ -59,7 +59,7 @@ final class Renderer {
             particlePipeline = try pipeline("particle_vs", "particle_fs")
             meshPipeline = try pipeline("mesh_vs", "mesh_fs")
         } catch {
-            NSLog("Vločka: shader – \(error)")
+            NSLog("Vločka: shader error – \(error)")
             return nil
         }
     }
@@ -83,7 +83,7 @@ final class Renderer {
         buffers.advance()
     }
 
-    /// Vykreslení do textury (ladicí snímek bez okna).
+    /// Render into a texture (debug snapshot without a window).
     func render(to texture: MTLTexture, size: CGSize, particles: [Particle], mesh: [Vertex]) {
         guard let cmd = queue.makeCommandBuffer() else { return }
         var b = FrameBuffers()
@@ -121,7 +121,7 @@ final class Renderer {
     }
 }
 
-/// Trojitý kruhový buffer – CPU nepřepisuje data, která GPU ještě čte.
+/// Triple ring buffer – the CPU never overwrites data the GPU is still reading.
 struct FrameBuffers {
     private var meshBufs: [MTLBuffer?] = [nil, nil, nil]
     private var partBufs: [MTLBuffer?] = [nil, nil, nil]

@@ -1,7 +1,7 @@
 import AppKit
 import Metal
 
-/// Ladicí režim: `Vlocka --snapshot out.png` nasimuluje scénu s falešnými okny a uloží obrázek.
+/// Debug mode: `Vlocka --snapshot out.png` simulates a scene with fake windows and saves an image.
 @MainActor
 enum Snapshot {
     static func run(path: String) {
@@ -48,13 +48,13 @@ enum Snapshot {
 
         let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: cs, bitmapInfo: info)!
         ctx.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
-        // plocha
+        // desktop
         ctx.setFillColor(CGColor(red: 0.18, green: 0.30, blue: 0.45, alpha: 1)); ctx.fill(screen)
-        // lišta menu a dock
+        // menu bar and Dock
         ctx.setFillColor(CGColor(gray: 0.92, alpha: 0.9)); ctx.fill(CGRect(x: 0, y: 728, width: 1200, height: 32))
         ctx.setFillColor(CGColor(gray: 0.85, alpha: 0.6)); ctx.fill(dock)
         ctx.setFillColor(CGColor(red: 0.9, green: 0.7, blue: 0.3, alpha: 1)); for i in icons { ctx.fill(i) }
-        // okna (zadní první)
+        // windows (back to front)
         for (k, wf) in wins.reversed().enumerated() {
             ctx.setFillColor(CGColor(gray: k == 0 ? 0.97 : 0.99, alpha: 1)); ctx.fill(wf.frame)
             ctx.setFillColor(CGColor(gray: 0.88, alpha: 1)); ctx.fill(CGRect(x: wf.frame.minX, y: wf.frame.maxY - 28, width: wf.frame.width, height: 28))
@@ -63,6 +63,6 @@ enum Snapshot {
         ctx.draw(snow, in: CGRect(x: 0, y: 0, width: w, height: h))
         let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-        print("ok \(particles.count) částic, \(mesh.count) vrcholů")
+        print("ok \(particles.count) particles, \(mesh.count) vertices")
     }
 }

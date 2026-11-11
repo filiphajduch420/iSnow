@@ -2,49 +2,56 @@ import Foundation
 import Observation
 import ServiceManagement
 
-/// Rychlé předvolby intenzity (nastaví hustotu, počet vloček a vítr).
+/// Quick intensity presets (set density, flake count and wind).
 enum Intensity: Int, CaseIterable, Identifiable, Sendable {
     case light, normal, blizzard, storm
     var id: Int { rawValue }
-    var title: String { ["Poprašek", "Normální", "Vánice", "Kalamita"][rawValue] }
+    var title: String {
+        switch self {
+        case .light: String(localized: "Flurry")
+        case .normal: String(localized: "Normal")
+        case .blizzard: String(localized: "Blizzard")
+        case .storm: String(localized: "Snowstorm")
+        }
+    }
     var density: Double { [0.35, 1.0, 3.2, 6.5][rawValue] }
     var maxFlakes: Double { [250, 700, 2000, 4000][rawValue] }
     var wind: Double { [0.6, 1.0, 1.6, 2.6][rawValue] }
 }
 
-/// Všechna nastavení simulace. Ukládá se jako JSON; chybějící klíče se doplní výchozími hodnotami.
+/// All simulation settings. Stored as JSON; missing keys fall back to defaults.
 struct SimConfig: Codable, Equatable, Sendable {
-    // Sněžení
-    var density: Double = 1.0          // násobek 28 vloček/s na 1000 bodů šířky
+    // Snowfall
+    var density: Double = 1.0          // multiple of 28 flakes/s per 1000 pt of width
     var maxFlakes: Double = 700
     var flakeSize: Double = 1.0
     var fallSpeed: Double = 1.0
     var wind: Double = 1.0
     var sparkle: Bool = false
     var tint: [Double] = [1, 1, 1]
-    // Závěje
+    // Drifts
     var onWindows = true
     var onDock = true
     var onIcons = true
     var onMenuBar = true
-    var windowDepth: Double = 36       // max. výška závěje na okně v bodech
+    var windowDepth: Double = 36       // max drift height on a window, in points
     var groundDepth: Double = 34
-    var accumulation: Double = 3.5     // rychlost přibývání
-    var melt: Double = 0               // bodů za minutu
+    var accumulation: Double = 3.5     // how fast snow piles up
+    var melt: Double = 0               // points per minute
     var icicles = true
     var icicleLength: Double = 1.0
-    // Sněhulák
+    // Snowman
     var snowman = true
     var snowmanSize: Double = 1.3
-    var snowmanBreak: Double = 2.0     // minut mezi sněhuláky
+    var snowmanBreak: Double = 2.0     // minutes between snowmen
     var snowballs = true
-    var throwEvery: Double = 30        // sekund
-    // Ostatní
+    var throwEvery: Double = 30        // seconds
+    // Other
     var mouse = true
     var frost = false
     var pauseFullscreen = true
     var fps: Int = 60
-    // Za běhu (neukládá se)
+    // Runtime only (not persisted)
     var paused = false
 
     private enum CodingKeys: String, CodingKey {
@@ -95,7 +102,7 @@ final class Settings {
         set { config.paused = newValue }
     }
 
-    /// Má aplikace oprávnění Zpřístupnění (Dock a ikony plochy).
+    /// Whether the app has Accessibility permission (Dock and desktop icons).
     var axTrusted = false
     var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
 
@@ -110,7 +117,7 @@ final class Settings {
     }
 
     private func scheduleSave() {
-        // Posuvníky mění hodnotu plynule – ukládáme se zpožděním.
+        // Sliders change values continuously – save with a short delay.
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
@@ -125,7 +132,7 @@ final class Settings {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
-            NSLog("Vločka: přihlášení – \(error.localizedDescription)")
+            NSLog("Vločka: login item – \(error.localizedDescription)")
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }

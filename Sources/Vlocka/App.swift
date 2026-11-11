@@ -23,26 +23,26 @@ struct MenuContent: View {
     let delegate: AppDelegate
 
     var body: some View {
-        Toggle("Sněží", isOn: Binding(get: { !settings.paused }, set: { settings.paused = !$0 }))
+        Toggle("Snowing", isOn: Binding(get: { !settings.paused }, set: { settings.paused = !$0 }))
             .keyboardShortcut("s")
-        Picker("Intenzita", selection: Binding<Intensity?>(
+        Picker("Intensity", selection: Binding<Intensity?>(
             get: { settings.config.preset },
             set: { if let p = $0 { settings.config.apply(p) } })) {
             ForEach(Intensity.allCases) { Text($0.title).tag(Optional($0)) }
         }
         Divider()
-        Toggle("Sníh na oknech", isOn: $settings.config.onWindows)
-        Toggle("Sněhulák", isOn: $settings.config.snowman)
-        Toggle("Kurzor rozhání sníh", isOn: $settings.config.mouse)
+        Toggle("Snow on Windows", isOn: $settings.config.onWindows)
+        Toggle("Snowman", isOn: $settings.config.snowman)
+        Toggle("Cursor Scatters Snow", isOn: $settings.config.mouse)
         if !settings.axTrusted && (settings.config.onDock || settings.config.onIcons) {
-            Button("Povolit sníh na Docku a ikonách…") { Tracker.requestAccessibility() }
+            Button("Allow Snow on the Dock and Icons…") { Tracker.requestAccessibility() }
         }
         Divider()
-        Button("Setřást všechen sníh") { delegate.shakeAll() }
-        SettingsLink { Text("Nastavení…") }
+        Button("Shake Off All Snow") { delegate.shakeAll() }
+        SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
         Divider()
-        Button("Ukončit Vločku") { NSApp.terminate(nil) }
+        Button("Quit Vločka") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }
@@ -64,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
         guard let r = Renderer() else {
-            NSLog("Vločka: Metal není k dispozici")
+            NSLog("Vločka: Metal is not available")
             NSApp.terminate(nil)
             return
         }
@@ -133,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         poll()
     }
 
-    /// Obrazovka s Dockem: ta, kde se visibleFrame liší dole/vlevo/vpravo, jinak hlavní.
+    /// Screen hosting the Dock: the one whose visibleFrame is inset at the bottom, otherwise the main screen.
     private func dockScreenIndex(_ screens: [NSScreen]) -> Int {
         if let d = tracker.dockFrame, let i = screens.firstIndex(where: { $0.frame.intersects(d) }) { return i }
         return screens.firstIndex(where: { $0.visibleFrame.minY - $0.frame.minY > 8 }) ?? 0

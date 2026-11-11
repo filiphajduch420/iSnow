@@ -1,4 +1,4 @@
-// Vygeneruje AppIcon.icns: tmavě modrý čtverec s bílou vločkou (SF Symbol).
+// Generates AppIcon.icns: a dark blue rounded square with a white snowflake (SF Symbol).
 import AppKit
 
 let out = CommandLine.arguments[1]

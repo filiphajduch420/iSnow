@@ -1,44 +1,115 @@
-# Vločka
+# Vločka ❄️
 
-Malá aplikace do menu baru: na Macu sněží přes všechno, sníh se drží na oknech, Docku,
-ikonách plochy i liště menu, pod okny rostou rampouchy a na Docku si staví sněhuláka.
+**It snows on your Mac.** Vločka (Czech for *snowflake*) is a tiny menu bar app that lets snow fall
+over everything on your screen. Snow settles on top of your windows, the Dock, desktop icons and the
+menu bar, icicles grow under windows you leave alone, and a snowman builds itself on the Dock.
 
-## Efekty
-- Vločky ve třech hloubkách (paralaxa), vítr, intenzita Poprašek / Normální / Vánice.
-- Závěje na horních hranách oken (jen viditelné části), na Docku, ikonách a spodním okraji.
-- Posunutí okna → sníh sklouzne ve směru pohybu a dopadne na okna pod ním; zavření → spadne vše.
-- Rampouchy pod okny, která se ~12 s nehýbou; při pohnutí se ulomí. Rampouchy i pod lištou menu.
-- Sněhulák: přikutálí 3 koule, oblékne šálu a mrkev, mává, hází koule na okna a ikony,
-  po pár minutách se rozpadne a roztaje. Kliknutím ho rozbíjíš (každý 3. zásah shodí patro),
-  někdy se brání.
-- Kliknutí sněhem procházejí – myš chytá jen malý panel nad sněhulákem.
+It is not a wallpaper or a screensaver – it snows on top of whatever you are doing, and every click
+goes straight through the snow.
 
-## Nastavení (⌘, z menu vločky)
-- **Sněžení:** předvolby Poprašek / Normální / Vánice / Kalamita, hustota, max. počet vloček,
-  velikost a rychlost vloček, vítr, třpytivé vločky, barva sněhu.
-- **Závěje:** kde se sníh drží (okna, Dock, ikony, lišta menu), max. výška na oknech a u spodního
-  okraje, rychlost přibývání, tání, rampouchy a jejich délka, tlačítko „Setřást všechen sníh“.
-- **Sněhulák:** zapnutí, velikost, pauza mezi sněhuláky, „Postavit hned“, koulovačka a jak často hází.
-- **Ostatní:** kurzor rozhání vločky a rychlým tahem shrnuje sníh z oken, ojíněné okraje obrazovky,
-  nesněžit přes aplikace na celé obrazovce, 30 / 60 / 120 fps, spouštění po přihlášení,
-  obnovení výchozího nastavení.
+## Features
 
-## Stack a nároky
-- Swift 6 (strict concurrency), SwiftUI `MenuBarExtra`, `@Observable`, `SMAppService`.
-- Vlastní Metal renderer: 1 instancované volání pro všechny částice + 1 pro trojúhelníky.
-  Shadery se kompilují ze zdroje, žádné textury ani assety.
-- `CADisplayLink` (max 60 fps, v úsporném režimu 30 fps); když nic nepadá, vykreslování se uspí.
-  Při uspání obrazovky / zamčení se vše zastaví.
-- Polohy oken z `CGWindowList` (~8×/s, bez oprávnění, nečte obsah). Dock a ikony plochy přes
-  Zpřístupnění (volitelné, mimo hlavní vlákno 1×/s).
-- Binárka ~270 kB, aplikace ~0,5 MB, ~1 % CPU a ~20 MB paměti při běžném sněžení (M-série).
+- **Snowfall** with parallax depth, gusty wind and four presets: Flurry, Normal, Blizzard, Snowstorm.
+- **Drifts** pile up on the visible top edges of windows, on the Dock, on desktop icons and along the
+  bottom of the screen. Hidden parts of a window stay snow-free.
+- **Move a window** and its snow slides off in the direction you dragged it, landing on whatever is
+  below. Close it and all of it falls.
+- **Icicles** grow under windows that stay still for a while (and under the menu bar). Move the
+  window and they snap off.
+- **Snowman** on the Dock: rolls in three balls, stacks them, puts on a scarf and a carrot nose,
+  waves, and throws snowballs at your windows and icons. After a few minutes it falls apart and
+  melts, and later a new one appears. Click it to knock it apart – every third hit drops a level,
+  and sometimes it fights back.
+- **Extras:** the cursor scatters flakes and a quick swipe brushes snow off a window, sparkling
+  flakes, custom snow color, melting, frosted screen edges, and no snow over full-screen apps.
 
-## Sestavení
+## Settings
+
+Open **Settings…** (⌘,) from the snowflake in the menu bar:
+
+| Tab | What you can change |
+|---|---|
+| Snowfall | Preset, density, max number of flakes, flake size, fall speed, wind, sparkle, snow color |
+| Drifts | Where snow settles, max drift height on windows and at the bottom, pile-up speed, melting, icicles and their length, *Shake Off All Snow* |
+| Snowman | On/off, size, break between snowmen, *Build Now*, snowball fight and how often it throws |
+| Other | Cursor interaction, frosted edges, full-screen pause, 30 / 60 / 120 fps, launch at login, restore defaults |
+
+The app is in English and Czech and follows your system language.
+
+## Requirements
+
+- macOS 14 Sonoma or later
+- Apple silicon or Intel Mac (universal binary)
+
+## Install
+
+There are no prebuilt releases yet, so build it from source. You need Xcode or the Xcode Command
+Line Tools (Swift 6):
+
+```sh
+git clone https://github.com/filiphajduch420/vlocka-mac.git
+cd vlocka-mac
+./build.sh --install     # builds Vločka.app, copies it to ~/Applications and launches it
 ```
-./build.sh            # build/Vločka.app
-./build.sh --install  # zkopíruje do ~/Applications a spustí
-```
-Ladicí snímek bez okna: `.build/release/Vlocka --snapshot /cesta/snimek.png`.
 
-Pozn.: aplikace je podepsaná ad-hoc, takže po každém přestavění může macOS znovu chtít
-povolení Zpřístupnění (Nastavení → Soukromí a zabezpečení → Zpřístupnění).
+`./build.sh` without arguments only builds `build/Vločka.app`.
+
+## Permissions and privacy
+
+- **No permission is needed for snow on windows.** Window positions come from `CGWindowList`; the
+  app reads where windows are, never what is inside them. No Screen Recording permission is used.
+- **Snow on the Dock and desktop icons** needs *Accessibility* permission (to read the Dock's and
+  the desktop icons' positions). The menu offers a button that opens the system prompt. Without it,
+  everything else still works.
+- No network access, no analytics, nothing leaves your Mac. Settings are stored in `UserDefaults`.
+
+Because the app is signed ad hoc, macOS may ask for Accessibility permission again after you rebuild it.
+
+## Performance
+
+Vločka is built to stay out of the way:
+
+- one instanced Metal draw call for all particles and one for all triangles (drifts, icicles,
+  snowman); shaders are compiled from source, so there are no textures or other assets;
+- `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode;
+- rendering stops completely when nothing is moving, and while the screen is asleep or locked;
+- window positions are polled about 8× per second, Accessibility queries run off the main thread
+  once per second.
+
+On an M-series Mac a normal snowfall uses about 1 % CPU and about 20 MB of memory. The app bundle is
+about 1 MB.
+
+## How it works
+
+| File | Role |
+|---|---|
+| `App.swift` | SwiftUI `MenuBarExtra`, settings scene, app delegate that wires screens, polling and power events |
+| `SettingsView.swift` | The settings window |
+| `Settings.swift` | `@Observable` settings, presets, JSON persistence, launch at login (`SMAppService`) |
+| `Tracker.swift` | Window positions (`CGWindowList`), Dock and desktop icons (Accessibility) |
+| `Simulation.swift` | Per-screen simulation: flakes, drift height maps, falling chunks, icicles, snowballs, cursor |
+| `Snowman.swift` | The snowman's state machine and drawing |
+| `Mesh.swift` | Triangle helpers |
+| `Renderer.swift` | Metal renderer with a triple-buffered ring of vertex buffers |
+| `Overlay.swift` | Click-through overlay window per screen, display link, the snowman's click panel |
+| `Snapshot.swift` | Debug mode that renders a fake scene to a PNG |
+
+Each drift is a height map with 4-point bins along the top edge of a surface. Flakes that cross the
+surface deposit snow into a bin, and a simple slope rule spreads it to the neighbours, so drifts
+round off at the ends. When a window moves or disappears, its height map turns into falling chunks
+that can land on surfaces further down.
+
+### Debug snapshot
+
+```sh
+swift build -c release
+.build/release/Vlocka --snapshot /tmp/vlocka.png
+```
+
+This simulates a scene with fake windows, a Dock and icons and saves it as an image – handy for
+checking rendering without screen recording permission.
+
+## Contributing
+
+Issues and pull requests are welcome. Please keep the app lightweight: no third-party
+dependencies, no extra assets, and nothing that runs when nothing is moving.
