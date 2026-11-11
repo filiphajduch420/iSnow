@@ -24,7 +24,7 @@ goes straight through the snow.
    It should print `iSnow-v1.1.dmg: OK`. The SHA-256 of `iSnow-v1.1.dmg` is:
    <!-- sha256 -->
    ```
-   130ccb884efb1707f10795ea74deb75ec4a10f60fbfb685aa099eec0d6816e01
+   db163439b94c9aaf175a82adee860e7cd840b3084235502ce54599d4770b4d43
    ```
    <!-- /sha256 -->
 3. Open the DMG and drag **iSnow** onto **Applications**.

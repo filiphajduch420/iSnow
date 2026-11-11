@@ -256,7 +256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             o.fps = cfg.fps
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
                           icons: tracker.icons, widgets: tracker.widgets, dockEstimated: tracker.dockEstimated,
-                          dockAvoid: tracker.dockAvoid, menuBars: tracker.menuBars, activeWindow: tracker.activeWindow,
+                          dockAvoid: tracker.dockAvoid,
+                          // In a full-screen Space the menu bar windows stay listed (just auto-hidden), but the
+                          // Dock's own window disappears – treat that as "no menu bar" for full-screen detection.
+                          menuBars: tracker.dockWindowOnScreen ? tracker.menuBars : [],
+                          activeWindow: tracker.activeWindow,
                           now: now, cfg: cfg) || o.sim.isAnimating {
                 o.wake()
             }
