@@ -52,6 +52,7 @@ final class Pile {
     var frostSeed: UInt64 = 0
     var limit: [Float] = []          // per-bin drawing limit (the Dock's snow stays a thin ledge under windows)
     var lastSeen: Double = 0         // time of the last sync (for window speed)
+    var parkedSince: Double?         // window went away (other Space, hidden) – kept, not drawn
 
     init(key: Int, kind: SurfaceKind, rect: CGRect, binW: Float, now: Double) {
         self.key = key
@@ -81,9 +82,14 @@ final class Simulation {
 
     let origin: CGPoint
     let size: CGSize
-    let menuBarHeight: CGFloat
-    let dockBottomGuess: CGFloat         // top edge of a bottom Dock, derived from visibleFrame
-    var hostsSnowman: Bool
+    private(set) var menuBarHeight: CGFloat
+    private(set) var dockBottomGuess: CGFloat   // top edge of a bottom Dock, derived from visibleFrame
+    var hostsSnowman: Bool {
+        didSet {
+            // The Dock moved to another screen: the snowmen and the tree move with it.
+            if !hostsSnowman { snowmen = []; treePos = nil }
+        }
+    }
 
     private(set) var flakes: [Flake] = []
     private var debris: [Debris] = []
@@ -94,7 +100,6 @@ final class Simulation {
     private var columns: [[Pile]] = []          // landables bucketed by 32-pt screen column
     private static let columnW: Float = 32
     private var menuIcicles: [Icicle] = []
-    private var menuIceDirty = true
     private var menuSnow: [Float] = []
     var snowmen: [Snowman] = []
     private var windowRects: [(key: Int, rect: CGRect)] = []   // front to back
@@ -104,6 +109,16 @@ final class Simulation {
     private var dockGuessed = false         // the Dock's frame is only estimated (no Accessibility)
     private var avoidLocal: CGRect?         // area around the Dock kept free of other snow
     private var treeGhost = false
+    private var treeHidden = false            // under a menu or popover
+    private var localOcc: [CGRect] = []       // menus, popovers, notifications (local coordinates)
+    private var keepVanishedUntil: Double = 0 // after a Space switch, vanished windows keep their snow
+    private var activeRect: CGRect?           // the frontmost window (snow is calmer over it)
+    private var mouseLocal: SIMD2<Float>?
+    private var shovelHeld: Float = 0         // how long ⌥ has been held
+    private var santa: Christmas.Sleigh?
+    private var nextSanta: Double = 45
+    /// Short status for the menu ("Paused: full-screen app").
+    var isFullscreenPaused: Bool { fullscreen }
 
     private var time: Double = 0
     private var spawnAcc: Double = 0
@@ -118,7 +133,7 @@ final class Simulation {
     private var tint: (Float, Float, Float) = (1, 1, 1)
 
     /// Height of the camera housing (notch) – full-screen windows end below it.
-    let safeTop: CGFloat
+    private(set) var safeTop: CGFloat
 
     init(screenFrame: CGRect, visibleFrame: CGRect, hostsSnowman: Bool, safeTop: CGFloat = 0) {
         origin = screenFrame.origin
@@ -131,6 +146,16 @@ final class Simulation {
         menuSnow = Array(repeating: 0, count: n)
     }
 
+    /// Menu bar auto-hide, Dock size and the notch can change without a new screen configuration.
+    func updateMetrics(screenFrame: CGRect, visibleFrame: CGRect, safeTop: CGFloat) {
+        menuBarHeight = max(0, screenFrame.maxY - visibleFrame.maxY)
+        dockBottomGuess = max(0, visibleFrame.minY - screenFrame.minY)
+        self.safeTop = safeTop
+    }
+
+    /// Called on a Space switch: windows that vanish now are on another Space, keep their snow.
+    func noteSpaceChange(now: Double) { keepVanishedUntil = now + 1.5 }
+
     var W: Float { Float(size.width) }
     var H: Float { Float(size.height) }
 
@@ -140,7 +165,7 @@ final class Simulation {
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
               widgets: [TrackedWindow] = [], dockEstimated: Bool = false, dockAvoid: CGRect? = nil,
-              menuBars: [CGRect]? = nil, now: Double, cfg: SimConfig) -> Bool {
+              menuBars: [CGRect]? = nil, activeWindow: CGRect? = nil, now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
             || cfg.unlimitedDrifts != self.cfg.unlimitedDrifts
@@ -156,11 +181,20 @@ final class Simulation {
             bars.contains { $0.intersects(screenGlobal) && $0.maxY >= screenGlobal.maxY - 2 && $0.minY > screenGlobal.maxY - 90 }
         } ?? true
         let topGap = max(safeTop, menuBarHeight) + 1
-        fullscreen = cfg.pauseFullscreen && windows.contains { w in
+        // Windows that reach from the bottom edge to the top (or to the notch while the menu bar is
+        // hidden). One of them spanning the width is full screen; several side by side are Split View.
+        var spans: [(CGFloat, CGFloat)] = []
+        for w in windows {
             let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            guard r.minX <= 1, r.minY <= 1, r.maxX >= size.width - 1 else { return false }
-            return r.maxY >= size.height - 1 || (!menuVisible && r.maxY >= size.height - topGap)
+            guard r.minY <= 1, r.maxY >= size.height - 1 || (!menuVisible && r.maxY >= size.height - topGap),
+                  r.maxX > 0, r.minX < size.width else { continue }
+            spans.append((max(0, r.minX), min(size.width, r.maxX)))
         }
+        spans.sort { $0.0 < $1.0 }
+        var reach: CGFloat = 0
+        for sp in spans where sp.0 <= reach + 12 { reach = max(reach, sp.1) }   // Split View has a small gap
+        fullscreen = cfg.pauseFullscreen && !spans.isEmpty && reach >= size.width - 1
+            && (spans.count == 1 || !menuVisible)
         if fullscreen != wasFull {
             changed = true
             if fullscreen {
@@ -175,10 +209,21 @@ final class Simulation {
         var seen = Set<Int>()
         var order: [Pile] = []
         let localOcc = occluders.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
+        self.localOcc = localOcc
+        activeRect = activeWindow.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
 
         func upsert(key: Int, kind: SurfaceKind, rect r: CGRect) -> Pile {
             seen.insert(key)
             if let p = piles[key] {
+                if p.parkedSince != nil {
+                    // Back from another Space: keep the snow if the window didn't move meanwhile.
+                    p.parkedSince = nil
+                    if p.rect != r { p.rect = r; p.resize(binW: Self.binW); p.icicles = []; p.icicleVisible = []; p.frost = 0 }
+                    p.lastSeen = now
+                    p.dirty = true
+                    changed = true
+                    return p
+                }
                 let dx = Float(r.minX - p.rect.minX), dy = Float(r.minY - p.rect.minY)
                 let resized = abs(p.rect.width - r.width) > 0.5 || abs(p.rect.height - r.height) > 0.5
                 if abs(dx) > 0.5 || abs(dy) > 0.5 || resized {
@@ -226,6 +271,7 @@ final class Simulation {
                 let p = upsert(key: w.id, kind: .window, rect: r)
                 if p.frostSeed == 0 { p.frostSeed = UInt64(truncatingIfNeeded: w.id) &* 0x9E37_79B9_7F4A_7C15 | 1 }
                 if updateVisibility(p, occluders: front) { changed = true }
+                if updateLimit(p, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
                 p.occluders = front
                 order.append(p)
             }
@@ -242,7 +288,7 @@ final class Simulation {
                 // thin ledge, so it never covers the window (or the icons below).
                 let p = upsert(key: Self.dockKey, kind: .dock, rect: d)
                 if updateVisibility(p, occluders: localOcc) { changed = true }
-                if updateDockLimit(p, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
+                if updateDockLimit(p, windows: Array(front.dropFirst(localOcc.count)), mouse: mouseLocal) { changed = true }
                 order.append(p)
             }
         }
@@ -251,9 +297,10 @@ final class Simulation {
             for f in icons {
                 let r = f.offsetBy(dx: -origin.x, dy: -origin.y)
                 guard bounds.contains(r) else { continue }
-                let key = 0x4000_0000 + Int(r.minX / 4) * 8192 + Int(r.minY / 4)
+                let key = (1 << 40) + Int(r.minX / 4) * 8192 + Int(r.minY / 4)
                 let p = upsert(key: key, kind: .icon, rect: r)
                 if updateVisibility(p, occluders: front) { changed = true }
+                if updateLimit(p, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
                 order.append(p)
             }
         }
@@ -262,19 +309,30 @@ final class Simulation {
             for w in widgets {
                 let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
                 guard bounds.contains(r) else { continue }
-                let p = upsert(key: 0x5000_0000 + w.id, kind: .widget, rect: r)
+                let p = upsert(key: (1 << 41) + w.id, kind: .widget, rect: r)
                 if updateVisibility(p, occluders: front) { changed = true }
+                if updateLimit(p, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
                 order.append(p)
             }
         }
         // Bottom edge of the screen
         let g = upsert(key: Self.groundKey, kind: .ground, rect: CGRect(x: 0, y: -1, width: size.width, height: 1))
         if updateGroundVisibility(g, dock: avoidLocal ?? dockLocal, margin: dockEstimated ? 30 : 4, windows: front) { changed = true }
+        if updateLimit(g, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
         order.append(g)
 
         for (k, p) in piles where !seen.contains(k) {
-            shake(p, push: 0)
-            piles[k] = nil
+            if let since = p.parkedSince {
+                // Gone for good after 10 minutes on another Space.
+                if now - since > 600 { piles[k] = nil }
+                continue
+            }
+            if now < keepVanishedUntil && p.kind == .window {
+                p.parkedSince = now          // switched Space: keep the snow for when it comes back
+            } else {
+                shake(p, push: 0)            // closed, minimized or hidden: the snow falls
+                piles[k] = nil
+            }
             changed = true
         }
         landables = order
@@ -378,15 +436,42 @@ final class Simulation {
         return changed
     }
 
-    /// The bottom drift lies behind windows: a window reaching the bottom edge hides it.
-    private func updateDockLimit(_ p: Pile, windows: [CGRect]) -> Bool {
+    /// Snow never grows into a window in front of it: each column is limited by the lowest window
+    /// above the surface (so the bottom drift and tall hills stay out of windows).
+    private func updateLimit(_ p: Pile, windows: [CGRect]) -> Bool {
         if p.limit.count != p.bins.count { p.limit = Array(repeating: .infinity, count: p.bins.count) }
         let top = p.rect.maxY
         var changed = false
         for i in p.bins.indices {
             let x = p.rect.minX + (CGFloat(i) + 0.5) * CGFloat(Self.binW)
-            let covered = windows.contains { x >= $0.minX && x <= $0.maxX && top + 4 >= $0.minY && top + 4 <= $0.maxY }
-            let l: Float = covered ? 4 : .infinity
+            var l = Float.infinity
+            for w in windows where x >= w.minX && x <= w.maxX && w.minY > top + 1 {
+                l = min(l, Float(w.minY - top) - 1)
+            }
+            if p.limit[i] != l { p.limit[i] = l; changed = true }
+        }
+        if changed { p.dirty = true }
+        return changed
+    }
+
+    /// The Dock's snow: a thin ledge under a window that sits on the Dock, and while the cursor is
+    /// over the Dock (so labels and magnified icons stay readable).
+    private func updateDockLimit(_ p: Pile, windows: [CGRect], mouse: SIMD2<Float>?) -> Bool {
+        if p.limit.count != p.bins.count { p.limit = Array(repeating: .infinity, count: p.bins.count) }
+        let top = p.rect.maxY
+        let hover = mouse.map { m in
+            p.rect.insetBy(dx: -10, dy: -10).union(CGRect(x: p.rect.minX, y: top, width: p.rect.width, height: 90))
+                .contains(CGPoint(x: CGFloat(m.x), y: CGFloat(m.y)))
+        } ?? false
+        var changed = false
+        for i in p.bins.indices {
+            let x = p.rect.minX + (CGFloat(i) + 0.5) * CGFloat(Self.binW)
+            var l = Float.infinity
+            for w in windows where x >= w.minX && x <= w.maxX {
+                if top + 4 >= w.minY && top + 4 <= w.maxY { l = 4; break }
+                if w.minY > top + 1 { l = min(l, Float(w.minY - top) - 1) }
+            }
+            if hover { l = min(l, 3) }
             if p.limit[i] != l { p.limit[i] = l; changed = true }
         }
         if changed { p.dirty = true }
@@ -412,6 +497,9 @@ final class Simulation {
     func step(dt: Double, now: Double, mouse: CGPoint? = nil, shovel: Bool = false) {
         time += dt
         let fdt = Float(dt)
+        mouseLocal = mouse.map { SIMD2(Float($0.x), Float($0.y)) }
+        // ⌥ only becomes a shovel after a short hold, so typing ⌥-characters doesn't shovel.
+        shovelHeld = shovel ? shovelHeld + fdt : 0
         wind = Float(cfg.wind) * Float(sin(time * 0.071) * 16 + sin(time * 0.23) * 6 + sin(time * 0.017) * 12)
 
         if !cfg.paused && !fullscreen {
@@ -425,7 +513,10 @@ final class Simulation {
         shovelAt = nil
         if cfg.mouse, let mouse {
             let m = SIMD2(Float(mouse.x), Float(mouse.y))
-            if shovel { stepShovel(m, dt: fdt) }
+            if shovelHeld > 0.25 {
+                shovelAt = m                 // the shovel follows the cursor while ⌥ is held
+                stepShovel(m, dt: fdt)
+            }
             stepMouse(m, dt: fdt)
         } else { lastMouse = nil }
         let acc = Float(cfg.accumulation)
@@ -448,7 +539,7 @@ final class Simulation {
             if cfg.onMenuBar, f.depth > 0.6, oy > H - Float(menuBarHeight), f.y <= H - Float(menuBarHeight) {
                 // Powder snow along the bottom edge of the menu bar
                 let b = Int(f.x / Self.binW)
-                if b >= 0 && b < menuSnow.count && menuSnow[b] < 2.2 { menuSnow[b] += 0.12; menuIceDirty = true }
+                if b >= 0 && b < menuSnow.count && menuSnow[b] < 2.2 { menuSnow[b] += 0.12 }
             }
             if f.y < -10 { flakes.swapAt(i, flakes.count - 1); flakes.removeLast(); continue }
             if f.x < -30 { f.x += W + 60 } else if f.x > W + 30 { f.x -= W + 60 }
@@ -514,15 +605,19 @@ final class Simulation {
             let tick = Float(meshTimer)
             meshTimer = 0
             let temp = Float(cfg.temperature)
-            if cfg.meltRate > 0 {
-                let m = cfg.meltRate / 60 * tick
-                for p in landables {
-                    var any = false
-                    for k in p.bins.indices where p.bins[k] > 0 { p.bins[k] = max(0, p.bins[k] - m); any = true }
-                    if any { p.dirty = true }
+            // Snow always settles and evaporates a little (slowly in frost), and melts fast above zero.
+            // Deep snow also compacts, so drifts level off instead of growing forever.
+            let base = cfg.meltBase / 60 * tick
+            let compact = Float(0.006) / 60 * tick
+            for p in landables {
+                var any = false
+                for k in p.bins.indices where p.bins[k] > 0 {
+                    p.bins[k] = max(0, p.bins[k] - base - p.bins[k] * compact)
+                    any = true
                 }
-                for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - m * 0.2) }
+                if any { p.dirty = true }
             }
+            for k in menuSnow.indices where menuSnow[k] > 0 { menuSnow[k] = max(0, menuSnow[k] - base * 0.2) }
             // Frost on windows: grows on still windows when it is below zero, thaws above.
             let frostTarget: Float = cfg.windowFrost && temp < 0 ? min(1, -temp / 15) : 0
             for p in landables where p.kind == .window {
@@ -537,12 +632,13 @@ final class Simulation {
                     continue
                 }
                 if temp > 0 {
-                    // Thaw: icicles shrink and eventually disappear.
+                    // Thaw: icicles shrink and eventually disappear (visibility kept in step).
                     if !p.icicles.isEmpty {
                         for k in p.icicles.indices { p.icicles[k].len -= temp * 0.12 * tick }
-                        p.icicles.removeAll { $0.len <= 0.3 }
-                        p.icicleVisible = Array(repeating: false, count: p.icicles.count)
-                        p.dirty = true
+                        for k in p.icicles.indices.reversed() where p.icicles[k].len <= 0.3 {
+                            p.icicles.remove(at: k)
+                            if k < p.icicleVisible.count { p.icicleVisible.remove(at: k) }
+                        }
                         p.iceDirty = true
                     }
                     continue
@@ -553,7 +649,7 @@ final class Simulation {
                     // The colder it is, the more icicles form.
                     let count = max(2, min(18, Int(w / 110 * (0.6 + 0.4 * coldFactor))))
                     p.icicles = (0..<count).map { _ in
-                        let maxLen = Float.random(in: 7...30) * Float(cfg.icicleLength)
+                        let maxLen = Float.random(in: 7...30)        // × icicle length × cold, applied when growing
                         return Icicle(x: Float.random(in: 16...max(17, w - 16)), len: 0, maxLen: maxLen,
                                       rate: maxLen / Float.random(in: 50...160), width: Float.random(in: 3.5...6))
                     }
@@ -562,49 +658,60 @@ final class Simulation {
                 }
                 // Hard frost: icicles grow faster and up to ~3× longer.
                 let coldBoost = 1 + min(2, -temp / 8)
-                let target = coldFactor
-                for k in p.icicles.indices where p.icicles[k].len < p.icicles[k].maxLen * target {
-                    p.icicles[k].len = min(p.icicles[k].maxLen * target,
-                                           p.icicles[k].len + p.icicles[k].rate * coldBoost * target * tick)
-                    p.iceDirty = true
+                let target = coldFactor * Float(cfg.icicleLength)
+                for k in p.icicles.indices {
+                    let goal = p.icicles[k].maxLen * target
+                    if p.icicles[k].len < goal {
+                        p.icicles[k].len = min(goal, p.icicles[k].len + p.icicles[k].rate * coldBoost * target * tick)
+                        p.iceDirty = true
+                    } else if p.icicles[k].len > goal + 0.5 {
+                        p.icicles[k].len = goal              // the length slider was lowered
+                        p.iceDirty = true
+                    }
                 }
             }
-            if cfg.onMenuBar {
+            if cfg.onMenuBar && cfg.icicles && menuBarHeight > 0 {
                 if menuIcicles.isEmpty {
                     let count = max(4, Int(W / 140))
                     menuIcicles = (0..<count).map { _ in
-                        let m = Float.random(in: 5...18) * Float(cfg.icicleLength)
+                        let m = Float.random(in: 5...18)
                         return Icicle(x: Float.random(in: 10...(W - 10)), len: 0, maxLen: m,
                                       rate: m / Float.random(in: 90...240), width: Float.random(in: 3...5))
                     }
                 }
                 if temp > 0 {
                     for k in menuIcicles.indices { menuIcicles[k].len = max(0, menuIcicles[k].len - temp * 0.12 * tick) }
-                    menuIceDirty = true
                 } else {
-                    let target = coldFactor
-                    for k in menuIcicles.indices where menuIcicles[k].len < menuIcicles[k].maxLen * target {
-                        menuIcicles[k].len = min(menuIcicles[k].maxLen * target,
-                                                 menuIcicles[k].len + menuIcicles[k].rate * target * tick)
-                        menuIceDirty = true
+                    let target = coldFactor * Float(cfg.icicleLength)
+                    for k in menuIcicles.indices {
+                        let goal = menuIcicles[k].maxLen * target
+                        if menuIcicles[k].len < goal {
+                            menuIcicles[k].len = min(goal, menuIcicles[k].len + menuIcicles[k].rate * target * tick)
+                        } else if menuIcicles[k].len > goal + 0.5 {
+                            menuIcicles[k].len = goal
+                        }
                     }
                 }
-            } else if !menuIcicles.isEmpty || menuSnow.contains(where: { $0 > 0 }) {
+            } else if !menuIcicles.isEmpty {
                 menuIcicles = []
+            }
+            if !cfg.onMenuBar || menuBarHeight == 0, menuSnow.contains(where: { $0 > 0 }) {
                 for k in menuSnow.indices { menuSnow[k] = 0 }
-                menuIceDirty = true
             }
         }
 
-        if hostsSnowman { stepSnowmen(dt: fdt) }
+        if hostsSnowman { stepSnowmen(dt: fdt); stepSanta(dt: fdt) }
     }
 
     /// Does anything still need animating? If not, the display link goes to sleep.
     var isAnimating: Bool {
         if !cfg.paused && !fullscreen { return true }
-        if cfg.christmas && (cfg.christmasGarland || treePos != nil) && !fullscreen { return true }   // twinkling lights
-        if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty { return true }
-        return hostsSnowman && snowmen.contains { $0.isMoving }
+        if fullscreen { return false }
+        // Paused: the lights only keep twinkling if the user wants that.
+        if cfg.christmas && cfg.lightsWhilePaused && (cfg.christmasGarland || treePos != nil) { return true }
+        if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty || santa != nil { return true }
+        // While paused only a snowman in your hand or in the air needs frames.
+        return hostsSnowman && snowmen.contains { $0.carried || $0.falling }
     }
 
     // MARK: - Drift physics
@@ -635,8 +742,10 @@ final class Simulation {
     }
 
     private func deposit(_ p: Pile, _ b: Int, _ amount: Float) {
-        guard p.bins[b] < p.cap else { return }
-        p.bins[b] = min(p.cap, p.bins[b] + amount)
+        // A window in front blocks the column: snow can't pile up into it.
+        let cap = b < p.limit.count ? min(p.cap, max(0, p.limit[b])) : p.cap
+        guard p.bins[b] < cap else { return }
+        p.bins[b] = min(cap, p.bins[b] + amount)
         let n = p.bins.count
         let slope: Float = p.kind == .ground ? 1.8 : 1.7
         for _ in 0..<2 {
@@ -766,7 +875,6 @@ final class Simulation {
             shards.append(Shard(x: ic.x, y: H - Float(menuBarHeight), vy: 0, len: ic.len, width: ic.width))
         }
         menuIcicles = []
-        menuIceDirty = true
     }
 
     private func splat(_ s: Snowball) {
@@ -845,11 +953,14 @@ final class Simulation {
             let rel = m.x - Float(p.rect.minX)
             guard rel >= -16, rel < Float(p.rect.width) + 16 else { continue }
             let top = Float(p.rect.maxY)
-            guard m.y >= top - 6, m.y <= top + p.cap + 10 else { continue }
-            shovelAt = m
             let c = Int(rel / Self.binW), n = p.bins.count
+            let lo = max(0, c - reach), hi = min(n - 1, c + reach)
+            guard lo <= hi else { continue }
+            var tallest: Float = 0
+            for k in lo...hi { tallest = max(tallest, p.bins[k]) }
+            guard m.y >= top - 6, m.y <= top + tallest + 14 else { continue }
             var moved: Float = 0
-            for k in max(0, c - reach)...min(n - 1, max(0, c + reach)) where p.bins[k] > 0.05 {
+            for k in lo...hi where p.bins[k] > 0.05 {
                 let take = p.bins[k] * min(1, 14 * dt)
                 p.bins[k] -= take
                 moved += take
@@ -888,15 +999,12 @@ final class Simulation {
         } else {
             x = W * 0.12
         }
+        x = max(50 * s, min(W - 50 * s, x))
         let y = driftHeight(Self.groundKey, at: x) * 0.8
         treePos = (x, y)
         let r = Christmas.treeRect(x: x, baseY: y, scale: s).insetBy(dx: 12, dy: 6)
         treeGhost = cfg.snowmanGhost && windowRects.contains { $0.rect.intersects(r) }
-    }
-
-    var treeHitRect: CGRect? {
-        guard let p = treePos, !treeGhost, !fullscreen else { return nil }
-        return Christmas.treeRect(x: p.x, baseY: p.y, scale: Float(cfg.treeSize))
+        treeHidden = localOcc.contains { $0.intersects(r) }
     }
 
     /// Default spot for snowman i: along the top of the Dock from the right, then beside the Dock.
@@ -911,16 +1019,17 @@ final class Simulation {
         if let d = dockLocal, d.minY < size.height / 2 {
             let x = Float(d.maxX) - 46 * sz - Float(i) * gap
             if x > Float(d.minX) + 20 * sz { return (Self.dockKey, x, Float(d.maxY)) }
+            // No more room on the Dock: line up on the ground to the right of it (the tree is on the left).
             let k = Float(i) - floor((Float(d.width) - 66 * sz) / gap) - 1
-            let gx = Float(d.minX) - 30 * sz - max(0, k) * gap
-            return (Self.groundKey, max(20 * sz, gx), 0)
+            let a = avoidLocal ?? d
+            let gx = Float(a.maxX) + 40 * sz + max(0, k) * gap
+            return (Self.groundKey, min(W - 20 * sz, gx), 0)
         }
-        // Dock position unknown (no Accessibility permission): the Dock is centred, so line the
-        // snowmen up on its top around the middle of the screen.
+        // The Dock is on the side, hidden or unknown: stand on the bottom drift, spread around the middle.
         let count = Float(max(1, snowmen.count))
         let row = min(gap * 0.8, W * 0.4 / count)
         let x = W * 0.5 + (count - 1) * row * 0.5 - Float(i) * row
-        return (Self.dockKey, x, Float(dockBottomGuess))
+        return (Self.groundKey, x, 0)
     }
 
     private func surfaceRect(_ key: Int) -> CGRect? {
@@ -970,7 +1079,8 @@ final class Simulation {
                 s.baseY = sl.y + driftHeight(sl.key, at: sl.x) * 0.85
                 s.hostRect = surfaceRect(sl.key)
             } else if let r = surfaceRect(s.hostKey), let old = s.hostRect,
-                      abs(r.minX - old.minX) < 0.5, abs(r.maxY - old.maxY) < 0.5 {
+                      abs(r.minX - old.minX) < 0.5, abs(r.maxY - old.maxY) < 0.5,
+                      s.offsetX >= 0, s.offsetX <= Float(r.width) - 6 {
                 s.anchorX = Float(r.minX) + s.offsetX
                 s.baseY = Float(r.maxY) + driftHeight(s.hostKey, at: s.anchorX) * 0.85
             } else if s.phase != .absent {
@@ -980,13 +1090,18 @@ final class Simulation {
             } else {
                 s.userPlaced = false
             }
-            // Fade it when it covers a window (behind the Dock or in front of its own window).
+            // Fade it when it covers a window (behind the Dock or in front of its own window), and hide
+            // it completely under menus, popovers and notifications.
             s.ghost = false
-            if cfg.snowmanGhost, let body = s.bodyRect {
-                for w in windowRects {
-                    if w.key == s.hostKey { break }
-                    if w.rect.intersects(body.insetBy(dx: 4, dy: 2)) { s.ghost = true; break }
+            s.hidden = false
+            if let body = s.bodyRect {
+                if cfg.snowmanGhost {
+                    for w in windowRects {
+                        if w.key == s.hostKey { break }
+                        if w.rect.intersects(body.insetBy(dx: 4, dy: 2)) { s.ghost = true; break }
+                    }
                 }
+                s.hidden = !s.carried && localOcc.contains { $0.intersects(body) }
             }
             snowmen[i] = s
         }
@@ -997,8 +1112,13 @@ final class Simulation {
             for i in snowmen.indices where snowmen[i].phase != .absent { snowmen[i].dismantle(into: &debris) }
             return
         }
-        if cfg.paused || fullscreen { return }
+        if cfg.paused || fullscreen {
+            // Frozen life cycle, but a snowman you dropped still lands.
+            for i in snowmen.indices where snowmen[i].falling { stepFall(i, dt: dt) }
+            return
+        }
         for i in snowmen.indices {
+            snowmen[i].lookAt = mouseLocal
             snowmen[i].rebuildDelay = Float(cfg.snowmanBreak) * 60
             snowmen[i].throwEvery = Float(cfg.throwEvery)
             snowmen[i].temperature = Float(cfg.temperature)
@@ -1074,7 +1194,7 @@ final class Simulation {
 
     var snowmanHitRects: [CGRect?] {
         guard hostsSnowman, !fullscreen else { return [] }
-        return snowmen.map { $0.hitRect }
+        return snowmen.map { $0.hidden ? nil : $0.hitRect }
     }
 
     func restartSnowmen() {
@@ -1092,16 +1212,62 @@ final class Simulation {
         syncSnowmen()
     }
 
+    // MARK: - Santa
+
+    func launchSanta() {
+        guard hostsSnowman, santa == nil else { return }
+        let ltr = Bool.random()
+        santa = Christmas.Sleigh(x: ltr ? -200 : W + 200, y: H * Float.random(in: 0.62...0.8), dir: ltr ? 1 : -1, t: 0)
+    }
+
+    private func stepSanta(dt: Float) {
+        if cfg.christmas && cfg.santa && !cfg.paused && !fullscreen {
+            nextSanta -= Double(dt)
+            if nextSanta <= 0 {
+                nextSanta = Double.random(in: 180...420)
+                launchSanta()
+            }
+        }
+        guard var sl = santa else { return }
+        sl.t += dt
+        sl.x += sl.dir * 190 * dt
+        sl.y += cos(sl.t * 1.7) * 14 * dt
+        // A trail of sparkles behind the sleigh.
+        if debris.count < 9000 {
+            for _ in 0..<3 {
+                debris.append(Debris(x: sl.x - sl.dir * 60 + Float.random(in: -6...6), y: sl.y - 4 + Float.random(in: -5...5),
+                                     vx: -sl.dir * Float.random(in: 10...40), vy: Float.random(in: -30...10),
+                                     size: Float.random(in: 1.2...2.8), alpha: 1, lands: false, fade: 0.9))
+            }
+        }
+        santa = (sl.x < -260 || sl.x > W + 260) ? nil : sl
+    }
+
     // MARK: - Output for the renderer
 
+    /// Animation clock for drawing – wrapped so Float stays precise after days of uptime.
+    private var drawTime: Float { Float(time.truncatingRemainder(dividingBy: 3600)) }
+
     func buildParticles(into out: inout [Particle]) {
-        let t = Float(time)
+        let t = drawTime
+        // Calm over the active window: flakes there fade to a light dusting (soft 40-pt edge).
+        let calm = cfg.calmActive ? activeRect : nil
         for f in flakes {
+            var a = f.alpha, sz = f.size
+            if let r = calm {
+                let px = CGFloat(f.x), py = CGFloat(f.y)
+                if r.contains(CGPoint(x: px, y: py)) {
+                    let edge = Float(min(px - r.minX, r.maxX - px, py - r.minY, r.maxY - py))
+                    let k = min(1, edge / 40)
+                    a *= 1 - 0.78 * k
+                    sz *= 1 - 0.25 * k
+                }
+            }
             if f.sparkle {
                 let tw = 0.55 + 0.45 * sin(t * 9 + f.phase * 3)
-                out.append(Particle(x: f.x, y: f.y, size: f.size * (0.9 + 0.5 * tw), alpha: min(1, f.alpha * (0.5 + tw))))
+                out.append(Particle(x: f.x, y: f.y, size: sz * (0.9 + 0.5 * tw), alpha: min(1, a * (0.5 + tw))))
             } else {
-                out.append(Particle(x: f.x, y: f.y, size: f.size, alpha: f.alpha))
+                out.append(Particle(x: f.x, y: f.y, size: sz, alpha: a))
             }
         }
         for d in debris {
@@ -1119,20 +1285,31 @@ final class Simulation {
             if p.dirty || p.iceDirty { rebuildMesh(p) }
             out.append(contentsOf: p.mesh)
         }
-        if cfg.onMenuBar { buildMenuBar(into: &out) }
+        if cfg.onMenuBar && menuBarHeight > 0 { buildMenuBar(into: &out) }
         for s in shards { Mesh.icicle(&out, x: s.x, top: s.y, len: s.len, width: s.width, alpha: 0.9) }
         let style = Christmas.LightStyle(rawValue: cfg.lightStyle) ?? .colorful
+        let menuY = H - Float(menuBarHeight)
         if cfg.christmas && cfg.christmasGarland && menuBarHeight > 0 {
-            Christmas.garland(&out, width: W, y: H - Float(menuBarHeight), t: Float(time), style: style)
+            Christmas.garland(&out, width: W, y: menuY, t: drawTime, style: style) { x in self.underMenu(x) }
         }
-        if hostsSnowman, let p = treePos {
-            Christmas.tree(&out, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: Float(time), style: style,
+        if hostsSnowman, let p = treePos, !treeHidden {
+            Christmas.tree(&out, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: drawTime, style: style,
                            alpha: treeGhost ? 0.22 : 1)
         }
-        if hostsSnowman { for s in snowmen { s.build(into: &out) } }
-        if let m = shovelAt {
-            Mesh.ring(&out, cx: m.x, cy: m.y, r: 17, width: 1.5, color: (0.75, 0.86, 1, 0.75))
-        }
+        if hostsSnowman { for s in snowmen where !s.hidden { s.build(into: &out) } }
+        if let sl = santa { Christmas.sleigh(&out, sl, t: drawTime) }
+        if let m = shovelAt { Mesh.shovel(&out, at: m, digging: shovelDigging) }
+    }
+
+    /// Is something (an open menu, a popover) covering the strip right under the menu bar at x?
+    private func underMenu(_ x: Float) -> Bool {
+        let y = size.height - menuBarHeight - 6
+        return localOcc.contains { CGFloat(x) >= $0.minX && CGFloat(x) <= $0.maxX && y >= $0.minY && y <= $0.maxY }
+    }
+
+    private var shovelDigging: Bool {
+        guard let m = shovelAt, let last = lastMouse else { return false }
+        return abs(m.x - last.x) + abs(m.y - last.y) > 0.5
     }
 
     private func rebuildMesh(_ p: Pile) {
@@ -1222,12 +1399,12 @@ final class Simulation {
         let bw = Self.binW
         for (i, h) in menuSnow.enumerated() where h > 0.2 {
             let l = Float(i) * bw
+            if underMenu(l) { continue }
             Mesh.rect(&out, x: l, y: y - h * 0.5, w: bw, h: h, top: Mesh.snowTop, bottom: Mesh.snowBase)
         }
-        for ic in menuIcicles where ic.len > 0.6 {
+        for ic in menuIcicles where ic.len > 0.6 && !underMenu(ic.x) {
             Mesh.icicle(&out, x: ic.x, top: y, len: ic.len, width: ic.width * iceWidth(ic.len), alpha: 0.85)
         }
-        menuIceDirty = false
     }
 }
 

@@ -14,7 +14,7 @@ struct Snowman {
     var nextBuild: Float = 12
     var anchorX: Float = 0
     var baseY: Float = 0
-    let radii: [Float] = [14, 10, 7]
+    static let radii: (Float, Float, Float) = (14, 10, 7)
     var levels = 3
     var scale: Float = 1
     var dress: Float = 0
@@ -43,20 +43,25 @@ struct Snowman {
     var vy: Float = 0
     var ghost = false                // faded because it covers a window
     var santaHat = false
+    var hidden = false               // under a menu or popover: not drawn, not clickable
+    var lookAt: SIMD2<Float>?        // the cursor – the eyes follow it
 
-    @inline(__always) func R(_ k: Int) -> Float { radii[k] * scale * sizeScale }
+    @inline(__always) func R(_ k: Int) -> Float {
+        let r = k == 0 ? Self.radii.0 : (k == 1 ? Self.radii.1 : Self.radii.2)
+        return r * scale * sizeScale
+    }
 
     static let rollTime: Float = 1.8
 
     // MARK: Geometry
 
     func stackY(_ k: Int) -> Float {
-        let r = [R(0), R(1), R(2)]
-        let y0 = baseY + r[0] * 0.92
+        let r0 = R(0), r1 = R(1)
+        let y0 = baseY + r0 * 0.92
         if k == 0 { return y0 }
-        let y1 = y0 + r[0] * 0.8 + r[1] * 0.8
+        let y1 = y0 + r0 * 0.8 + r1 * 0.8
         if k == 1 { return y1 }
-        return y1 + r[1] * 0.8 + r[2] * 0.85
+        return y1 + r1 * 0.8 + R(2) * 0.85
     }
 
     /// Position and radius of ball k (accounts for rolling while building).
@@ -317,8 +322,19 @@ struct Snowman {
                     let sway = sin(t * 2.2) * 1.2 * s
                     Mesh.line(&out, (m.x + m.r * 0.45, neckY), (m.x + m.r * 0.62 + sway, neckY - 9 * s), width: 3 * s, color: red)
                     // eyes and mouth
-                    Mesh.disc(&out, cx: h.x - 2.4 * s, cy: h.y + 1.8 * s, r: 1.05 * s, color: (dark.0, dark.1, dark.2, a))
-                    Mesh.disc(&out, cx: h.x + 2.2 * s, cy: h.y + 1.8 * s, r: 1.05 * s, color: (dark.0, dark.1, dark.2, a))
+                    // Eyes: white with coal pupils that look at the cursor.
+                    for ex in [h.x - 2.4 * s, h.x + 2.2 * s] {
+                        let ey = h.y + 1.8 * s
+                        Mesh.circle(&out, cx: ex, cy: ey, r: 1.45 * s, center: (1, 1, 1, a), rim: (0.85, 0.88, 0.95, a), segments: 10)
+                        var px: Float = 0, py: Float = 0
+                        if let m = lookAt {
+                            let dx = m.x - ex, dy = m.y - ey
+                            let d = max(1, (dx * dx + dy * dy).squareRoot())
+                            px = dx / d * 0.55 * s
+                            py = dy / d * 0.55 * s
+                        }
+                        Mesh.disc(&out, cx: ex + px, cy: ey + py, r: 0.85 * s, color: (dark.0, dark.1, dark.2, a))
+                    }
                     for k in 0..<3 {
                         let sx = h.x - 2 * s + Float(k) * 2 * s
                         Mesh.disc(&out, cx: sx, cy: h.y - 3 * s + (k == 1 ? -0.6 * s : 0), r: 0.6 * s, color: (dark.0, dark.1, dark.2, a))

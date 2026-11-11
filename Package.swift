@@ -7,8 +7,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "iSnow",
-            path: "Sources/iSnow",
-            swiftSettings: [.unsafeFlags(["-enforce-exclusivity=unchecked"], .when(configuration: .release))]
+            path: "Sources/iSnow"
         )
     ]
 )

@@ -1,37 +1,32 @@
 #!/bin/zsh
-# Builds a release DMG of iSnow (universal: Apple silicon + Intel) and its SHA-256 checksum.
-#   ./scripts/release.sh 1.0      →  dist/iSnow-v1.0.dmg + dist/iSnow-v1.0.dmg.sha256
+# Builds a release DMG of iSnow (universal: Apple silicon + Intel) and its SHA-256 checksum,
+# then updates the download section of README.md (version and checksum).
+#   ./scripts/release.sh 1.1   →  dist/iSnow-v1.1.dmg + dist/iSnow-v1.1.dmg.sha256
 # The app is signed ad hoc with the hardened runtime (no Developer ID), like other indie builds.
+# Works with full Xcode or with just the Xcode Command Line Tools (see build.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:?usage: scripts/release.sh <version>}"
+VERSION="${1:?usage: scripts/release.sh <version>   (e.g. 1.1)}"
+if [[ ! "$VERSION" =~ '^[0-9]+(\.[0-9]+)*$' ]]; then
+  echo "error: version must look like 1.1 or 1.1.2, got '$VERSION'" >&2
+  exit 64
+fi
 NAME="iSnow"
 DMG="${NAME}-v${VERSION}.dmg"
 
 # Private temp dir, always cleaned up.
 STAGING="$(mktemp -d)"
-trap 'rm -rf "$STAGING"' EXIT
+BEFORE="$(mktemp)"                # README.md before the update, for the printed diff
+trap 'rm -rf "$STAGING" "$BEFORE"' EXIT
 
 echo "Building ${NAME} ${VERSION}…"
-swift build -c release --arch arm64 --arch x86_64
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/${NAME}"
+./build.sh --no-sign            # universal build/iSnow.app, icon regenerated when needed
 
 APP="${STAGING}/${NAME}.app"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/${NAME}"
-strip -x "$APP/Contents/MacOS/${NAME}"
-cp Info.plist "$APP/Contents/Info.plist"
+cp -R "build/${NAME}.app" "$APP"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "$APP/Contents/Info.plist"
-cp -R Resources/*.lproj "$APP/Contents/Resources/"
-if [[ ! -f build/AppIcon.icns ]]; then
-  mkdir -p build
-  swift scripts/make-icon.swift build
-  iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
-  rm -rf build/AppIcon.iconset
-fi
-cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 codesign --force --options runtime --sign - "$APP"
 codesign --verify --verbose=2 "$APP"
@@ -43,5 +38,29 @@ rm -f "dist/${DMG}" "dist/${DMG}.sha256"
 hdiutil create -volname "$NAME" -srcfolder "$STAGING" -ov -format UDZO "dist/${DMG}" >/dev/null
 
 # Checksum (run from dist/ so `shasum -c` works next to the download)
-(cd dist && shasum -a 256 "$DMG" | tee "${DMG}.sha256")
+(cd dist && shasum -a 256 "$DMG" > "${DMG}.sha256")
+SHA="$(cut -d' ' -f1 "dist/${DMG}.sha256")"
+cat "dist/${DMG}.sha256"
 echo "Done: dist/${DMG} ($(du -h "dist/${DMG}" | cut -f1))"
+
+# README: the checksum lives between <!-- sha256 --> and <!-- /sha256 -->; the DMG name and
+# "Current version" are updated wherever they appear. hdiutil output is not reproducible,
+# so every run changes the checksum.
+if ! grep -q '<!-- sha256 -->' README.md || ! grep -q '<!-- /sha256 -->' README.md; then
+  echo "warning: README.md has no <!-- sha256 --> … <!-- /sha256 --> markers – update the checksum by hand: $SHA" >&2
+  exit 0
+fi
+cp README.md "$BEFORE"
+ISNOW_VERSION="$VERSION" ISNOW_SHA="$SHA" perl -0pi -e '
+  my ($v, $sha) = ($ENV{ISNOW_VERSION}, $ENV{ISNOW_SHA});
+  s{(<!-- sha256 -->.*?)[0-9a-f]{64}(.*?<!-- /sha256 -->)}{$1$sha$2}s;
+  s{iSnow-v[0-9][0-9.]*?\.dmg}{iSnow-v$v.dmg}g;
+  s{(\*\*Current version: )[0-9][0-9.]*(\*\*)}{$1$v$2}g;
+' README.md
+grep -q "$SHA" README.md || echo "warning: no 64-character checksum between the README markers – paste it by hand: $SHA" >&2
+if cmp -s "$BEFORE" README.md; then
+  echo "README.md already up to date."
+else
+  echo "Updated README.md:"
+  diff -U0 "$BEFORE" README.md | grep -E '^[-+][^-+]' || true
+fi

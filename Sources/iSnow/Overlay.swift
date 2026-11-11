@@ -2,9 +2,16 @@ import AppKit
 import QuartzCore
 
 final class MetalView: NSView {
+    /// Pixels per point of the drawable (1 by default; the backing scale for Retina rendering).
+    var renderScale: CGFloat = 1
     override func makeBackingLayer() -> CALayer { CAMetalLayer() }
     override var isFlipped: Bool { false }
     var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+    // AppKit resets the layer's scale when the window's backing changes – keep ours.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if metalLayer.contentsScale != renderScale { metalLayer.contentsScale = renderScale }
+    }
 }
 
 /// Transparent full-screen window; all clicks pass through it.
@@ -20,11 +27,24 @@ final class Overlay: NSObject {
     private var particles: [Particle] = []
     private var mesh: [Vertex] = []
     private var buffers = FrameBuffers()
-    var lowPower = false { didSet { applyRate() } }
+    private var renderScale: CGFloat = 0
+    /// The effects are hidden: window ordered out, no frames.
+    private(set) var hidden = false
+    /// Screen asleep or locked: no frames, but the window stays.
+    var suspended = false { didSet { if suspended { sleep() } } }
     var fps = 60 { didSet { if fps != oldValue { applyRate() } } }
 
+    static func displayID(of screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+
+    /// Whether this overlay still fits `screen` (same display, same frame) and can be kept.
+    func matches(_ screen: NSScreen) -> Bool {
+        screenID == Self.displayID(of: screen) && sim.origin == screen.frame.origin && sim.size == screen.frame.size
+    }
+
     init(screen: NSScreen, renderer: Renderer, hostsSnowman: Bool) {
-        screenID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        screenID = Self.displayID(of: screen)
         self.renderer = renderer
         sim = Simulation(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, hostsSnowman: hostsSnowman,
                          safeTop: screen.safeAreaInsets.top)
@@ -45,9 +65,7 @@ final class Overlay: NSObject {
         window.contentView = view
         window.setFrame(screen.frame, display: false)
         renderer.configure(view.metalLayer)
-        let scale = screen.backingScaleFactor
-        view.metalLayer.contentsScale = scale
-        view.metalLayer.drawableSize = CGSize(width: screen.frame.width * scale, height: screen.frame.height * scale)
+        setRenderScale(1)
         window.orderFrontRegardless()
 
         let dl = view.displayLink(target: self, selector: #selector(tick(_:)))
@@ -57,12 +75,42 @@ final class Overlay: NSObject {
     }
 
     private func applyRate() {
-        let maxRate = Float(lowPower ? min(fps, 30) : fps)
+        let maxRate = Float(fps)
         link?.preferredFrameRateRange = CAFrameRateRange(minimum: min(24, maxRate), maximum: maxRate, preferred: maxRate)
     }
 
+    /// Drawable resolution: 1 pixel per point (cheap) or the screen's backing scale (Retina).
+    func setRenderScale(_ scale: CGFloat) {
+        guard scale > 0, scale != renderScale else { return }
+        renderScale = scale
+        view.renderScale = scale
+        view.metalLayer.contentsScale = scale
+        view.metalLayer.drawableSize = CGSize(width: (sim.size.width * scale).rounded(),
+                                              height: (sim.size.height * scale).rounded())
+        wake()
+    }
+
+    /// Keep the snow out of screenshots and screen sharing.
+    func setHiddenFromCapture(_ on: Bool) {
+        let t: NSWindow.SharingType = on ? .none : .readOnly
+        if window.sharingType != t { window.sharingType = t }
+    }
+
+    /// Hide all effects (the simulation keeps its state) or bring them back.
+    func setHidden(_ on: Bool) {
+        guard on != hidden else { return }
+        hidden = on
+        if on {
+            sleep()
+            window.orderOut(nil)
+        } else {
+            window.orderFrontRegardless()
+            wake()                      // draw at least one frame with the kept state
+        }
+    }
+
     func wake() {
-        guard let link, link.isPaused else { return }
+        guard !hidden, !suspended, let link, link.isPaused else { return }
         last = 0
         link.isPaused = false
     }
@@ -92,7 +140,7 @@ final class Overlay: NSObject {
         let t = Settings.shared.config.tint
         renderer.tint = SIMD3(Float(t[safe: 0] ?? 1), Float(t[safe: 1] ?? 1), Float(t[safe: 2] ?? 1))
         renderer.draw(layer: view.metalLayer, size: view.bounds.size, particles: particles, mesh: mesh, buffers: &buffers)
-        if !sim.isAnimating { link.isPaused = true }
+        if !sim.isAnimating || hidden || suspended { link.isPaused = true }
     }
 }
 
@@ -106,7 +154,19 @@ final class SnowmanPanel {
     var onDrag: ((CGPoint) -> Void)?
     var onDrop: ((CGPoint) -> Void)?
 
+    /// The user is carrying the snowman right now.
     var isDragging: Bool { view.dragging }
+
+    /// Whether the panel is on screen and contains the global point `p` (plus a margin).
+    func contains(_ p: CGPoint, margin: CGFloat = 0) -> Bool {
+        panel.isVisible && panel.frame.insetBy(dx: -margin, dy: -margin).contains(p)
+    }
+
+    /// Keep the click panel out of screenshots and screen sharing.
+    func setHiddenFromCapture(_ on: Bool) {
+        let t: NSWindow.SharingType = on ? .none : .readOnly
+        if panel.sharingType != t { panel.sharingType = t }
+    }
 
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)

@@ -79,7 +79,36 @@ enum Mesh {
         }
     }
 
-    /// Thin ring (shovel indicator).
+    /// A snow shovel held at the cursor: blade at the tip, handle going up and to the right.
+    /// (A background app can't replace the system cursor, so the shovel is drawn next to it.)
+    static func shovel(_ out: inout [Vertex], at m: SIMD2<Float>, digging: Bool) {
+        let tilt: Float = digging ? 0.15 : 0
+        let ang: Float = 0.95 - tilt                       // handle direction
+        let dx = cos(ang), dy = sin(ang)
+        let base = (m.x + 6, m.y - 4)
+        let top = (base.0 + dx * 34, base.1 + dy * 34)
+        let wood: RGBA = (0.55, 0.36, 0.2, 1), woodDark: RGBA = (0.38, 0.24, 0.12, 1)
+        line(&out, base, top, width: 2.6, color: wood)
+        // T-grip
+        let nx = -dy, ny = dx
+        line(&out, (top.0 - nx * 5, top.1 - ny * 5), (top.0 + nx * 5, top.1 + ny * 5), width: 2.6, color: woodDark)
+        // Blade: a slightly curved metal scoop below the handle
+        let bx = base.0 - dx * 2, by = base.1 - dy * 2
+        let w: Float = 9, l: Float = 13
+        let a = (bx + nx * w, by + ny * w), b = (bx - nx * w, by - ny * w)
+        let c = (b.0 - dx * l, b.1 - dy * l), d = (a.0 - dx * l, a.1 - dy * l)
+        let metal: RGBA = (0.72, 0.76, 0.82, 1), metalDark: RGBA = (0.48, 0.52, 0.58, 1)
+        v(&out, a.0, a.1, metal); v(&out, b.0, b.1, metal); v(&out, c.0, c.1, metalDark)
+        v(&out, a.0, a.1, metal); v(&out, c.0, c.1, metalDark); v(&out, d.0, d.1, metalDark)
+        line(&out, a, b, width: 1.2, color: (0.9, 0.92, 0.95, 1))
+        // A little snow on the blade while digging
+        if digging {
+            circle(&out, cx: (c.0 + d.0) / 2 + dx * 4, cy: (c.1 + d.1) / 2 + dy * 4, r: 4, center: (1, 1, 1, 1),
+                   rim: (0.85, 0.9, 0.97, 1), segments: 10)
+        }
+    }
+
+    /// Thin ring.
     static func ring(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, width: Float, color: RGBA, segments: Int = 28) {
         let r0 = r - width / 2, r1 = r + width / 2
         for s in 0..<segments {

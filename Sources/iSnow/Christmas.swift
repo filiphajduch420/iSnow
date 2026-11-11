@@ -41,7 +41,9 @@ enum Christmas {
 
     // MARK: Garland under the menu bar
 
-    static func garland(_ out: inout [Vertex], width W: Float, y top: Float, t: Float, style: LightStyle) {
+    /// `skip(x)` hides the part of the garland behind an open menu.
+    static func garland(_ out: inout [Vertex], width W: Float, y top: Float, t: Float, style: LightStyle,
+                        skip: (Float) -> Bool = { _ in false }) {
         let span: Float = 150, sag: Float = 11, spacing: Float = 19
         let wire: RGBA = (0.12, 0.2, 0.12, 0.9)
         var x0: Float = 0
@@ -57,11 +59,13 @@ enum Christmas {
             let steps = 12
             for k in 0..<steps {
                 let xa = x0 + len * Float(k) / Float(steps), xb = x0 + len * Float(k + 1) / Float(steps)
+                if skip(xa) || skip(xb) { continue }
                 Mesh.line(&out, (xa, yAt(xa)), (xb, yAt(xb)), width: 1.2, color: wire)
             }
             // bulbs hang slightly below the wire
             var x = x0 + spacing * 0.5
             while x < x1 - 4 {
+                if skip(x) { bulbIndex += 1; x += spacing; continue }
                 let y = yAt(x) - 3.5
                 let c = bulbColor(bulbIndex, style: style)
                 Mesh.line(&out, (x, yAt(x)), (x, y + 2), width: 1, color: wire)
@@ -71,6 +75,55 @@ enum Christmas {
             }
             x0 = x1
         }
+    }
+
+    // MARK: Santa's sleigh
+
+    struct Sleigh {
+        var x, y, dir, t: Float          // dir: +1 flies to the right, −1 to the left
+    }
+
+    /// Santa in his sleigh pulled by reindeer (Rudolph in front), drawn facing the flight direction.
+    static func sleigh(_ out: inout [Vertex], _ sl: Sleigh, t: Float) {
+        let d = sl.dir, x = sl.x, y = sl.y
+        func p(_ dx: Float, _ dy: Float) -> (Float, Float) { (x + dx * d, y + dy) }
+        let brown: RGBA = (0.45, 0.28, 0.15, 1), dark: RGBA = (0.3, 0.18, 0.1, 1)
+        let red: RGBA = (0.82, 0.1, 0.12, 1), gold: RGBA = (0.98, 0.8, 0.25, 1)
+        // Reins
+        Mesh.line(&out, p(-8, 8), p(90, 10), width: 0.9, color: (0.35, 0.2, 0.1, 0.9))
+        // Reindeer: three, the leader with a glowing red nose
+        for k in 0..<3 {
+            let rx = 34 + Float(k) * 28
+            let bob = sin(t * 9 + Float(k)) * 2
+            let legA = sin(t * 12 + Float(k) * 1.3) * 4
+            Mesh.line(&out, p(rx - 6, 2 + bob), p(rx - 8 + legA, -8 + bob), width: 1.6, color: dark)
+            Mesh.line(&out, p(rx + 6, 2 + bob), p(rx + 8 - legA, -8 + bob), width: 1.6, color: dark)
+            Mesh.circle(&out, cx: p(rx, 5 + bob).0, cy: y + 5 + bob, r: 7, center: (0.55, 0.36, 0.2, 1), rim: brown, segments: 12)
+            let head = p(rx + 10, 13 + bob)
+            Mesh.line(&out, p(rx + 5, 7 + bob), head, width: 3, color: brown)
+            Mesh.circle(&out, cx: head.0, cy: head.1, r: 3.4, center: (0.58, 0.38, 0.22, 1), rim: brown, segments: 10)
+            Mesh.line(&out, (head.0, head.1 + 2), (head.0 - 2 * d, head.1 + 9), width: 1, color: dark)
+            Mesh.line(&out, (head.0 - 1 * d, head.1 + 6), (head.0 - 5 * d, head.1 + 8), width: 0.9, color: dark)
+            if k == 2 {
+                let nose = (head.0 + 3.2 * d, head.1 - 0.5)
+                Mesh.circle(&out, cx: nose.0, cy: nose.1, r: 6, center: (1, 0.2, 0.2, 0.45), rim: (1, 0.2, 0.2, 0), segments: 12)
+                Mesh.disc(&out, cx: nose.0, cy: nose.1, r: 1.5, color: (1, 0.15, 0.15, 1))
+            }
+        }
+        // Sleigh body with a golden runner
+        Mesh.line(&out, p(-30, -10), p(4, -10), width: 1.6, color: gold)
+        Mesh.line(&out, p(4, -10), p(9, -4), width: 1.6, color: gold)
+        Mesh.tri(&out, p(-28, -7), p(2, -7), p(4, 8), red)
+        Mesh.tri(&out, p(-28, -7), p(4, 8), p(-30, 10), red)
+        Mesh.rect(&out, x: min(p(-30, 0).0, p(4, 0).0), y: y + 7, w: 34, h: 2.2, top: gold, bottom: gold)
+        // Santa: red coat, white beard, hat with a bobble
+        Mesh.circle(&out, cx: p(-14, 0).0, cy: y + 14, r: 7, center: (0.92, 0.15, 0.15, 1), rim: red, segments: 12)
+        Mesh.circle(&out, cx: p(-12, 0).0, cy: y + 23, r: 4.2, center: (1, 0.86, 0.75, 1), rim: (0.95, 0.78, 0.66, 1), segments: 10)
+        Mesh.circle(&out, cx: p(-11, 0).0, cy: y + 20, r: 3.6, center: (1, 1, 1, 1), rim: (0.9, 0.92, 0.96, 1), segments: 10)
+        Mesh.tri(&out, p(-17, 25), p(-7, 25), p(-19, 33), red)
+        Mesh.disc(&out, cx: p(-19, 0).0, cy: y + 33, r: 1.6, color: (1, 1, 1, 1))
+        // A sack of presents
+        Mesh.circle(&out, cx: p(-24, 0).0, cy: y + 12, r: 6, center: (0.75, 0.55, 0.3, 1), rim: (0.55, 0.38, 0.2, 1), segments: 10)
     }
 
     // MARK: Tree

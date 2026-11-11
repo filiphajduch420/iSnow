@@ -1,5 +1,4 @@
 import AppKit
-import Metal
 import SwiftUI
 
 /// Renders the README screenshots without any screen-recording permission: a drawn winter desktop
@@ -17,6 +16,7 @@ enum Promo {
         var sparkle = false
         var dragFrames = 0
         var finalDensity = 1.4
+        var santa = false              // send Santa's sleigh so it is on screen in the picture
     }
 
     static let size = CGSize(width: 1440, height: 900)
@@ -28,7 +28,7 @@ enum Promo {
 
     static let scenes: [Scene] = [
         Scene(name: "hero"),
-        Scene(name: "christmas", temperature: -4, seconds: 120, christmas: true, snowmen: 2),
+        Scene(name: "christmas", temperature: -4, seconds: 120, christmas: true, snowmen: 2, santa: true),
         Scene(name: "slide", temperature: -5, seconds: 140, snowmen: 2, dragFrames: 9),
         Scene(name: "frost", temperature: -20, seconds: 200, snowmen: 1, frostEdges: true, sparkle: true, finalDensity: 2.2),
     ]
@@ -57,6 +57,7 @@ enum Promo {
         cfg.frost = scene.frostEdges
         cfg.sparkle = scene.sparkle
         cfg.icicleLength = 1.2
+        cfg.santa = false              // no random flights; the scene sends Santa itself (below)
         var wins = [TrackedWindow(id: 2, frame: terminal), TrackedWindow(id: 1, frame: notes)]
         let widgets = widgetRects.enumerated().map { TrackedWindow(id: 100 + $0.offset, frame: $0.element) }
         var t = 0.0
@@ -71,7 +72,12 @@ enum Promo {
         cfg.density = scene.finalDensity
         cfg.maxFlakes = 1200
         sim.restartSnowmen()           // make sure no snowman is mid-melt in the picture
-        for _ in 0..<300 { tick() }
+        let finalTicks = 300
+        for i in 0..<finalTicks {
+            // Santa flies at about 190 pt/s from just off screen: 2.7 s before the end he is well inside.
+            if scene.santa && i == finalTicks - 80 { sim.launchSanta() }
+            tick()
+        }
         if scene.dragFrames > 0 {
             for f in 1...scene.dragFrames {
                 if f <= 4 { wins[1] = TrackedWindow(id: 1, frame: wins[1].frame.offsetBy(dx: 30, dy: -6)) }
@@ -79,35 +85,9 @@ enum Promo {
             }
         }
 
-        var particles: [Particle] = []
-        var mesh: [Vertex] = []
-        sim.buildParticles(into: &particles)
-        sim.buildMesh(into: &mesh)
-        let scale = 2
-        let w = Int(size.width) * scale, h = Int(size.height) * scale
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
-        d.usage = [.renderTarget]
-        d.storageMode = .shared
-        guard let tex = renderer.device.makeTexture(descriptor: d) else { return }
-        renderer.render(to: tex, size: size, particles: particles, mesh: mesh)
-        var px = [UInt8](repeating: 0, count: w * h * 4)
-        tex.getBytes(&px, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
-        let cs = CGColorSpaceCreateDeviceRGB()
-        let info = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
-        guard let snow = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                   space: cs, bitmapInfo: info)?.makeImage(),
-              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-                                  bitmapInfo: info) else { return }
-        ctx.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
-        drawDesktop(ctx, windows: wins, christmas: scene.christmas, temperature: scene.temperature)
-        ctx.draw(snow, in: screen)
-        save(ctx.makeImage(), path)
-    }
-
-    static func save(_ image: CGImage?, _ path: String) {
-        guard let image else { return }
-        let rep = NSBitmapImageRep(cgImage: image)
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        Snapshot.renderPNG(sim, renderer: renderer, size: size, path: path) { ctx in
+            drawDesktop(ctx, windows: wins, christmas: scene.christmas, temperature: scene.temperature)
+        }
     }
 
     // MARK: Drawing helpers
@@ -229,8 +209,8 @@ enum Promo {
             ("~/iSnow $ ./build.sh --install", NSColor(red: 0.55, green: 0.85, blue: 1, alpha: 1)),
             ("Build complete!", NSColor(white: 0.85, alpha: 1)),
             ("Signed and installed: ~/Applications/iSnow.app", NSColor(white: 0.85, alpha: 1)),
-            ("~/iSnow $ ./scripts/release.sh 1.0", NSColor(red: 0.55, green: 0.85, blue: 1, alpha: 1)),
-            ("Created dist/iSnow-v1.0.dmg", NSColor(white: 0.85, alpha: 1)),
+            ("~/iSnow $ ./scripts/release.sh 1.1", NSColor(red: 0.55, green: 0.85, blue: 1, alpha: 1)),
+            ("Created dist/iSnow-v1.1.dmg", NSColor(white: 0.85, alpha: 1)),
             ("~/iSnow $ █", NSColor(red: 0.55, green: 0.85, blue: 1, alpha: 1)),
         ]
         var y = r.maxY - 70
@@ -391,6 +371,6 @@ enum Promo {
         text("iSnow Settings", CGPoint(x: r.midX - 50, y: r.maxY - 35), size: 14, weight: .semibold,
              color: NSColor(white: 0.2, alpha: 1))
         NSGraphicsContext.restoreGraphicsState()
-        save(ctx.makeImage(), path)
+        Snapshot.savePNG(ctx.makeImage(), path)
     }
 }
