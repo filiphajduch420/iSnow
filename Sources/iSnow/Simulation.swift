@@ -98,6 +98,8 @@ final class Simulation {
     var snowmen: [Snowman] = []
     private var windowRects: [(key: Int, rect: CGRect)] = []   // front to back
     private var dockLocal: CGRect?
+    private var treePos: (x: Float, y: Float)?
+    private var treeGhost = false
 
     private var time: Double = 0
     private var spawnAcc: Double = 0
@@ -241,7 +243,7 @@ final class Simulation {
                 if p.bins.contains(where: { $0 > cap }) { p.bins = p.bins.map { min($0, cap) } }
             }
         }
-        if hostsSnowman { syncSnowmen() }
+        if hostsSnowman { syncSnowmen(); syncTree() }
         return changed
     }
 
@@ -516,6 +518,7 @@ final class Simulation {
     /// Does anything still need animating? If not, the display link goes to sleep.
     var isAnimating: Bool {
         if !cfg.paused && !fullscreen { return true }
+        if cfg.christmas && (cfg.christmasGarland || treePos != nil) && !fullscreen { return true }   // twinkling lights
         if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty { return true }
         return hostsSnowman && snowmen.contains { $0.isMoving }
     }
@@ -788,6 +791,28 @@ final class Simulation {
 
     // MARK: - Snowmen
 
+    /// The Christmas tree stands on the ground next to the Dock (left side if there is room).
+    private func syncTree() {
+        guard cfg.christmas, cfg.christmasTree else { treePos = nil; return }
+        let s = Float(cfg.treeSize)
+        var x: Float
+        if let d = dockLocal, d.minY < size.height / 2 {
+            x = Float(d.minX) - 62 * s
+            if x < 50 * s { x = Float(d.maxX) + 62 * s }
+        } else {
+            x = W * 0.12
+        }
+        let y = driftHeight(Self.groundKey, at: x) * 0.8
+        treePos = (x, y)
+        let r = Christmas.treeRect(x: x, baseY: y, scale: s).insetBy(dx: 12, dy: 6)
+        treeGhost = cfg.snowmanGhost && windowRects.contains { $0.rect.intersects(r) }
+    }
+
+    var treeHitRect: CGRect? {
+        guard let p = treePos, !treeGhost, !fullscreen else { return nil }
+        return Christmas.treeRect(x: p.x, baseY: p.y, scale: Float(cfg.treeSize))
+    }
+
     /// Default spot for snowman i: along the top of the Dock from the right, then beside the Dock.
     private func slot(_ i: Int, size sz: Float) -> (key: Int, x: Float, y: Float) {
         let gap = 64 * sz
@@ -880,6 +905,7 @@ final class Simulation {
             snowmen[i].rebuildDelay = Float(cfg.snowmanBreak) * 60
             snowmen[i].throwEvery = Float(cfg.throwEvery)
             snowmen[i].temperature = Float(cfg.temperature)
+            snowmen[i].santaHat = cfg.christmas && cfg.christmasHats
             if snowmen[i].falling { stepFall(i, dt: dt) }
             let wantsThrow = snowmen[i].step(dt: dt, debris: &debris, shards: &shards)
             if wantsThrow && cfg.snowballs && !snowmen[i].ghost { throwSnowball(from: i) }
@@ -994,6 +1020,14 @@ final class Simulation {
         }
         if cfg.onMenuBar { buildMenuBar(into: &out) }
         for s in shards { Mesh.icicle(&out, x: s.x, top: s.y, len: s.len, width: s.width, alpha: 0.9) }
+        let style = Christmas.LightStyle(rawValue: cfg.lightStyle) ?? .colorful
+        if cfg.christmas && cfg.christmasGarland && menuBarHeight > 0 {
+            Christmas.garland(&out, width: W, y: H - Float(menuBarHeight), t: Float(time), style: style)
+        }
+        if hostsSnowman, let p = treePos {
+            Christmas.tree(&out, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: Float(time), style: style,
+                           alpha: treeGhost ? 0.22 : 1)
+        }
         if hostsSnowman { for s in snowmen { s.build(into: &out) } }
         if let m = shovelAt {
             Mesh.ring(&out, cx: m.x, cy: m.y, r: 17, width: 1.5, color: (0.75, 0.86, 1, 0.75))

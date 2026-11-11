@@ -92,3 +92,18 @@
 "Shovel Snow at the Bottom" = "Odhrnout sníh dole";
 "Hold ⌥ Option and move the cursor over snow to shovel it – even at the bottom of the screen and on the Dock." = "Podrž ⌥ Option a pohybuj kurzorem po sněhu – odhrneš ho lopatou, i dole na obrazovce a na Docku.";
 "Unlimited – snow keeps piling up into hills" = "Neomezeně – sníh se hromadí do kopců";
+
+/* Christmas */
+"Christmas Mode" = "Vánoční režim";
+"Christmas" = "Vánoce";
+"Christmas mode" = "Vánoční režim";
+"Decorations" = "Výzdoba";
+"Christmas tree next to the Dock" = "Stromeček vedle Docku";
+"Tree size" = "Velikost stromečku";
+"String of lights under the menu bar" = "Světýlka pod lištou menu";
+"Santa hats on snowmen" = "Santovy čepice pro sněhuláky";
+"Lights" = "Světýlka";
+"Colorful, twinkling" = "Barevná, blikající";
+"Warm white" = "Teplá bílá";
+"Chasing" = "Běžící";
+"The lights keep twinkling even while the snow is paused." = "Světýlka blikají, i když je sněžení pozastavené.";

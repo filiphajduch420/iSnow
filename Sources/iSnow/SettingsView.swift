@@ -10,6 +10,7 @@ struct SettingsView: View {
             SnowTab(settings: settings).tabItem { Label("Snowfall", systemImage: "cloud.snow") }
             DriftTab(settings: settings, delegate: delegate).tabItem { Label("Drifts", systemImage: "mountain.2") }
             SnowmanTab(settings: settings, delegate: delegate).tabItem { Label("Snowman", systemImage: "figure.wave") }
+            ChristmasTab(settings: settings).tabItem { Label("Christmas", systemImage: "gift") }
             ExtrasTab(settings: settings).tabItem { Label("Other", systemImage: "sparkles") }
         }
         .frame(width: 500)
@@ -197,6 +198,34 @@ private struct SnowmanTab: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             .disabled(!settings.config.snowman)
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct ChristmasTab: View {
+    @Bindable var settings: Settings
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Christmas mode", isOn: $settings.config.christmas)
+            }
+            Section("Decorations") {
+                Toggle("Christmas tree next to the Dock", isOn: $settings.config.christmasTree)
+                ValueSlider(title: "Tree size", value: $settings.config.treeSize, range: 0.5...3, format: times)
+                    .disabled(!settings.config.christmasTree)
+                Toggle("String of lights under the menu bar", isOn: $settings.config.christmasGarland)
+                Toggle("Santa hats on snowmen", isOn: $settings.config.christmasHats)
+                Picker("Lights", selection: $settings.config.lightStyle) {
+                    Text("Colorful, twinkling").tag(Christmas.LightStyle.colorful.rawValue)
+                    Text("Warm white").tag(Christmas.LightStyle.warmWhite.rawValue)
+                    Text("Chasing").tag(Christmas.LightStyle.chase.rawValue)
+                }
+                Text("The lights keep twinkling even while the snow is paused.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .disabled(!settings.config.christmas)
         }
         .formStyle(.grouped)
     }

@@ -24,6 +24,8 @@ enum Snapshot {
         let env = ProcessInfo.processInfo.environment
         cfg.temperature = Double(env["ISNOW_TEMP"] ?? "") ?? -15
         cfg.snowmanCount = Double(env["ISNOW_SNOWMEN"] ?? "") ?? 3
+        cfg.christmas = env["ISNOW_XMAS"] != nil
+        cfg.lightStyle = Int(env["ISNOW_XMAS"] ?? "") ?? 0
         cfg.sparkle = true
         var t = 0.0
         let dt = 1.0 / 30

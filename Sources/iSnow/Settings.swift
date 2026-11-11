@@ -50,6 +50,13 @@ struct SimConfig: Codable, Equatable, Sendable {
     var snowmanBreak: Double = 2.0     // minutes between snowmen
     var snowballs = true
     var throwEvery: Double = 30        // seconds
+    // Christmas
+    var christmas = false
+    var christmasTree = true
+    var christmasGarland = true
+    var christmasHats = true
+    var lightStyle = 0                 // Christmas.LightStyle
+    var treeSize: Double = 1.3
     // Other
     var mouse = true
     var frost = false
@@ -62,7 +69,8 @@ struct SimConfig: Codable, Equatable, Sendable {
         case density, maxFlakes, flakeSize, fallSpeed, wind, sparkle, tint, onWindows, onDock, onIcons, onMenuBar,
              unlimitedDrifts, windowDepth, groundDepth, accumulation, temperature, windowFrost, icicles, icicleLength, snowman,
              snowmanSize, snowmanCount, snowmanGhost,
-             snowmanBreak, snowballs, throwEvery, mouse, frost, pauseFullscreen, fps
+             snowmanBreak, snowballs, throwEvery, christmas, christmasTree, christmasGarland, christmasHats, lightStyle,
+             treeSize, mouse, frost, pauseFullscreen, fps
     }
 
     var preset: Intensity? {

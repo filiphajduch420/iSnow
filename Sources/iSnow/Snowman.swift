@@ -42,6 +42,7 @@ struct Snowman {
     var falling = false
     var vy: Float = 0
     var ghost = false                // faded because it covers a window
+    var santaHat = false
 
     @inline(__always) func R(_ k: Int) -> Float { radii[k] * scale * sizeScale }
 
@@ -315,6 +316,14 @@ struct Snowman {
                     if hasCarrot {
                         let orange: RGBA = (0.98, 0.52, 0.12, a)
                         Mesh.tri(&out, (h.x + 0.5 * s, h.y + 0.8 * s), (h.x + 0.5 * s, h.y - 1.4 * s), (h.x + h.r + 6 * s, h.y - 0.6 * s), orange)
+                    }
+                    if santaHat {
+                        let red: RGBA = (0.86, 0.1, 0.15, a), white: RGBA = (1, 1, 1, a)
+                        let base = h.y + h.r * 0.5
+                        let tip = (h.x + h.r * 1.05, base + h.r * 1.25)
+                        Mesh.tri(&out, (h.x - h.r * 0.85, base), (h.x + h.r * 0.85, base), tip, red)
+                        Mesh.rect(&out, x: h.x - h.r * 0.95, y: base - 1.3 * s, w: h.r * 1.9, h: 2.8 * s, top: white, bottom: white)
+                        Mesh.circle(&out, cx: tip.0, cy: tip.1, r: 1.9 * s, center: white, rim: (0.85, 0.88, 0.95, a), segments: 10)
                     }
                 }
             }

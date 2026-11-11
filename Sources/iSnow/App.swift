@@ -41,6 +41,7 @@ struct MenuContent: View {
         Divider()
         Toggle("Snow on Windows", isOn: $settings.config.onWindows)
         Toggle("Snowman", isOn: $settings.config.snowman)
+        Toggle("Christmas Mode", isOn: $settings.config.christmas)
         Toggle("Cursor Scatters Snow", isOn: $settings.config.mouse)
         if !settings.axTrusted && (settings.config.onDock || settings.config.onIcons) {
             Button("Allow Snow on the Dock and Icons…") { Tracker.requestAccessibility() }

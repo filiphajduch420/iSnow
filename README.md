@@ -33,6 +33,9 @@ goes straight through the snow.
   windows frost over from the corners – the colder, the more.
 - **Stays out of your way:** snow at the bottom and on the Dock hides behind windows, so a zoomed
   window is never covered, and a snowman that covers a window fades out and lets clicks through.
+- **Christmas mode:** a decorated tree with twinkling lights, a glowing star and presents next to
+  the Dock, a string of lights under the menu bar (colorful, warm white or chasing) and Santa hats
+  for the snowmen.
 - **Extras:** the cursor scatters flakes, sparkling
   flakes, custom snow color, melting, frosted screen edges, and no snow over full-screen apps.
 
@@ -45,6 +48,7 @@ Open **Settings…** (⌘,) from the snowflake in the menu bar:
 | Snowfall | Preset, temperature, density, max number of flakes, flake size, fall speed, wind, sparkle, snow color |
 | Drifts | Where snow settles, unlimited hills or a max drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
 | Snowman | On/off, number of snowmen, size, break between snowmen, fade when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often it throws |
+| Christmas | Christmas mode, tree and its size, lights under the menu bar, light style, Santa hats |
 | Other | Cursor interaction, frosted edges, full-screen pause, 30 / 60 / 120 fps, launch at login, restore defaults |
 
 The app is in English and Czech and follows your system language.
@@ -102,6 +106,7 @@ about 1 MB.
 | `Tracker.swift` | Window positions (`CGWindowList`), Dock and desktop icons (Accessibility) |
 | `Simulation.swift` | Per-screen simulation: flakes, drift height maps, falling chunks, icicles, snowballs, cursor |
 | `Snowman.swift` | The snowman's state machine and drawing |
+| `Christmas.swift` | Tree, presents and the string of lights |
 | `Mesh.swift` | Triangle helpers |
 | `Renderer.swift` | Metal renderer with a triple-buffered ring of vertex buffers |
 | `Overlay.swift` | Click-through overlay window per screen, display link, the snowman's click panel |
@@ -123,7 +128,8 @@ This simulates a scene with fake windows, a Dock and icons and saves it as an im
 checking rendering without screen recording permission. `ISNOW_TEMP=3` sets the temperature,
 `ISNOW_SNOWMEN=2` the number of snowmen, `ISNOW_MAX=1` uses a single zoomed window and
 `ISNOW_DRAG=14` drags a window for 14 frames and captures the snow falling off, and
-`ISNOW_SECONDS=600` simulates ten minutes of snowfall first.
+`ISNOW_SECONDS=600` simulates ten minutes of snowfall first. `ISNOW_XMAS=0` (1, 2) turns on
+Christmas mode with the given light style.
 
 ## Contributing
 
