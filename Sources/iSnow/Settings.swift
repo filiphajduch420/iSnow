@@ -33,6 +33,7 @@ struct SimConfig: Codable, Equatable, Sendable {
     var onWindows = true
     var onDock = true
     var onIcons = true
+    var onWidgets = true
     var onMenuBar = true
     var unlimitedDrifts = true         // drifts keep growing into hills (only the screen top limits them)
     var windowDepth: Double = 36       // max drift height on a window, in points (when limited)
@@ -66,7 +67,7 @@ struct SimConfig: Codable, Equatable, Sendable {
     var paused = false
 
     private enum CodingKeys: String, CodingKey {
-        case density, maxFlakes, flakeSize, fallSpeed, wind, sparkle, tint, onWindows, onDock, onIcons, onMenuBar,
+        case density, maxFlakes, flakeSize, fallSpeed, wind, sparkle, tint, onWindows, onDock, onIcons, onWidgets, onMenuBar,
              unlimitedDrifts, windowDepth, groundDepth, accumulation, temperature, windowFrost, icicles, icicleLength, snowman,
              snowmanSize, snowmanCount, snowmanGhost,
              snowmanBreak, snowballs, throwEvery, christmas, christmasTree, christmasGarland, christmasHats, lightStyle,

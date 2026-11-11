@@ -7,7 +7,7 @@ struct Vertex { var x, y, r, g, b, a: Float }
 /// Round particle instance (flake, snow chunk, snowball) – 16 B.
 struct Particle { var x, y, size, alpha: Float }
 
-enum SurfaceKind { case window, dock, icon, ground }
+enum SurfaceKind { case window, dock, icon, widget, ground }
 
 struct Flake {
     var x, y, vx, vy, phase, freq, amp, depth, size, alpha: Float
@@ -131,7 +131,7 @@ final class Simulation {
     /// Returns true when something changed and a redraw is needed.
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
-              now: Double, cfg: SimConfig) -> Bool {
+              widgets: [TrackedWindow] = [], now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
             || cfg.unlimitedDrifts != self.cfg.unlimitedDrifts
@@ -222,6 +222,16 @@ final class Simulation {
                 order.append(p)
             }
         }
+        // Desktop widgets – like icons, they sit below all windows.
+        if cfg.onWidgets {
+            for w in widgets {
+                let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
+                guard bounds.contains(r) else { continue }
+                let p = upsert(key: 0x5000_0000 + w.id, kind: .widget, rect: r)
+                if updateVisibility(p, occluders: front) { changed = true }
+                order.append(p)
+            }
+        }
         // Bottom edge of the screen
         let g = upsert(key: Self.groundKey, kind: .ground, rect: CGRect(x: 0, y: -1, width: size.width, height: 1))
         if updateGroundVisibility(g, dock: dockLocal, windows: front) { changed = true }
@@ -247,11 +257,19 @@ final class Simulation {
         return changed
     }
 
+    /// How much longer icicles get in the cold: 1× at 0 °C, 2× at −7 °C, ~3× in hard frost.
+    private var coldFactor: Float {
+        cfg.temperature < 0 ? 1 + min(2.2, Float(-cfg.temperature) / 7) : 1
+    }
+
+    /// Long icicles are also thicker at the root.
+    private func iceWidth(_ len: Float) -> Float { 1 + min(1.2, max(0, len - 20) / 40) }
+
     private func capFor(_ p: Pile) -> Float {
         let roof = max(0, H - Float(menuBarHeight) - Float(p.rect.maxY) - 2)   // room up to the menu bar
         if cfg.unlimitedDrifts {
             switch p.kind {
-            case .window, .dock: return roof
+            case .window, .dock, .widget: return roof
             case .ground: return max(0, roof - 30)
             case .icon: return min(Float(cfg.windowDepth) * 0.4, 22)
             }
@@ -261,6 +279,7 @@ final class Simulation {
         case .window: return w
         case .dock: return min(w * 0.55, 34)
         case .icon: return min(w * 0.4, 22)
+        case .widget: return w * 0.7
         case .ground: return Float(cfg.groundDepth)
         }
     }
@@ -279,7 +298,12 @@ final class Simulation {
     private func updateVisibility(_ p: Pile, occluders: [CGRect]) -> Bool {
         let n = p.bins.count
         let top = p.rect.maxY
-        let margin = p.kind == .window ? 4 : (p.kind == .dock ? 3 : 1)
+        let margin: Int = switch p.kind {
+        case .window: 4
+        case .widget: 5          // widgets have large rounded corners
+        case .dock: 3
+        default: 1
+        }
         let topLimit = size.height - menuBarHeight - 1
         var changed = false
         for i in 0..<n {
@@ -472,7 +496,8 @@ final class Simulation {
                 guard now - p.lastMove > 12, p.rect.minY > 40 else { continue }
                 if p.icicles.isEmpty {
                     let w = Float(p.rect.width)
-                    let count = max(2, min(9, Int(w / 110)))
+                    // The colder it is, the more icicles form.
+                    let count = max(2, min(18, Int(w / 110 * (0.6 + 0.4 * coldFactor))))
                     p.icicles = (0..<count).map { _ in
                         let maxLen = Float.random(in: 7...30) * Float(cfg.icicleLength)
                         return Icicle(x: Float.random(in: 16...max(17, w - 16)), len: 0, maxLen: maxLen,
@@ -481,9 +506,12 @@ final class Simulation {
                     p.icicleVisible = Array(repeating: false, count: count)
                     p.dirty = true          // visibility is computed on the next sync
                 }
+                // Hard frost: icicles grow faster and up to ~3× longer.
                 let coldBoost = 1 + min(2, -temp / 8)
-                for k in p.icicles.indices where p.icicles[k].len < p.icicles[k].maxLen {
-                    p.icicles[k].len = min(p.icicles[k].maxLen, p.icicles[k].len + p.icicles[k].rate * coldBoost * tick)
+                let target = coldFactor
+                for k in p.icicles.indices where p.icicles[k].len < p.icicles[k].maxLen * target {
+                    p.icicles[k].len = min(p.icicles[k].maxLen * target,
+                                           p.icicles[k].len + p.icicles[k].rate * coldBoost * target * tick)
                     p.iceDirty = true
                 }
             }
@@ -500,8 +528,10 @@ final class Simulation {
                     for k in menuIcicles.indices { menuIcicles[k].len = max(0, menuIcicles[k].len - temp * 0.12 * tick) }
                     menuIceDirty = true
                 } else {
-                    for k in menuIcicles.indices where menuIcicles[k].len < menuIcicles[k].maxLen {
-                        menuIcicles[k].len = min(menuIcicles[k].maxLen, menuIcicles[k].len + menuIcicles[k].rate * tick)
+                    let target = coldFactor
+                    for k in menuIcicles.indices where menuIcicles[k].len < menuIcicles[k].maxLen * target {
+                        menuIcicles[k].len = min(menuIcicles[k].maxLen * target,
+                                                 menuIcicles[k].len + menuIcicles[k].rate * target * tick)
                         menuIceDirty = true
                     }
                 }
@@ -823,7 +853,12 @@ final class Simulation {
             let gx = Float(d.minX) - 30 * sz - max(0, k) * gap
             return (Self.groundKey, max(20 * sz, gx), 0)
         }
-        return (Self.groundKey, W * 0.5 + 180 - Float(i) * gap, Float(dockBottomGuess))
+        // Dock position unknown (no Accessibility permission): the Dock is centred, so line the
+        // snowmen up on its top around the middle of the screen.
+        let count = Float(max(1, snowmen.count))
+        let row = min(gap * 0.8, W * 0.4 / count)
+        let x = W * 0.5 + (count - 1) * row * 0.5 - Float(i) * row
+        return (Self.dockKey, x, Float(dockBottomGuess))
     }
 
     private func surfaceRect(_ key: Int) -> CGRect? {
@@ -936,7 +971,7 @@ final class Simulation {
 
     func throwSnowball(from i: Int = 0) {
         guard snowmen.indices.contains(i) else { return }
-        let targets = landables.filter { ($0.kind == .window || $0.kind == .icon) && $0.visible.contains(true) }
+        let targets = landables.filter { ($0.kind == .window || $0.kind == .icon || $0.kind == .widget) && $0.visible.contains(true) }
         guard let p = targets.randomElement() else { return }
         let idx = p.visible.indices.filter { p.visible[$0] }
         guard let b = idx.randomElement() else { return }
@@ -1056,7 +1091,8 @@ final class Simulation {
         if p.kind == .window && p.frost > 0.01 { buildWindowFrost(p) }
         if p.kind == .window {
             for (k, ic) in p.icicles.enumerated() where ic.len > 0.6 && k < p.icicleVisible.count && p.icicleVisible[k] {
-                Mesh.icicle(&p.mesh, x: x0 + ic.x, top: Float(p.rect.minY) + 0.5, len: ic.len, width: ic.width, alpha: 0.85)
+                Mesh.icicle(&p.mesh, x: x0 + ic.x, top: Float(p.rect.minY) + 0.5, len: ic.len,
+                            width: ic.width * iceWidth(ic.len), alpha: 0.85)
             }
         }
         p.dirty = false
@@ -1119,7 +1155,7 @@ final class Simulation {
             Mesh.rect(&out, x: l, y: y - h * 0.5, w: bw, h: h, top: Mesh.snowTop, bottom: Mesh.snowBase)
         }
         for ic in menuIcicles where ic.len > 0.6 {
-            Mesh.icicle(&out, x: ic.x, top: y, len: ic.len, width: ic.width, alpha: 0.85)
+            Mesh.icicle(&out, x: ic.x, top: y, len: ic.len, width: ic.width * iceWidth(ic.len), alpha: 0.85)
         }
         menuIceDirty = false
     }

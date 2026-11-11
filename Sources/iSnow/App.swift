@@ -81,6 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         renderer = r
         settings.axTrusted = AXIsProcessTrusted()
+        // Ask once for Accessibility (snow on the Dock and desktop icons), e.g. after a rename/reinstall.
+        if !settings.axTrusted && (settings.config.onDock || settings.config.onIcons)
+            && !UserDefaults.standard.bool(forKey: "askedAccessibility") {
+            UserDefaults.standard.set(true, forKey: "askedAccessibility")
+            Tracker.requestAccessibility()
+        }
         settings.onChange = { [weak self] in self?.settingsChanged() }
         tracker.refreshWindows()
         rebuildOverlays()
@@ -169,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for o in overlays {
             o.fps = cfg.fps
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
-                          icons: tracker.icons, now: now, cfg: cfg) || o.sim.isAnimating {
+                          icons: tracker.icons, widgets: tracker.widgets, now: now, cfg: cfg) || o.sim.isAnimating {
                 o.wake()
             }
         }

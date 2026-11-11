@@ -128,6 +128,7 @@ private struct DriftTab: View {
                 Toggle("On windows", isOn: $settings.config.onWindows)
                 Toggle("On the Dock", isOn: $settings.config.onDock)
                 Toggle("On desktop icons", isOn: $settings.config.onIcons)
+                Toggle("On desktop widgets", isOn: $settings.config.onWidgets)
                 Toggle("On the menu bar", isOn: $settings.config.onMenuBar)
                 if !settings.axTrusted {
                     HStack {

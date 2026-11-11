@@ -10,8 +10,8 @@ goes straight through the snow.
 ## Features
 
 - **Snowfall** with parallax depth, gusty wind and four presets: Flurry, Normal, Blizzard, Snowstorm.
-- **Drifts** pile up on the visible top edges of windows, on the Dock, on desktop icons and along the
-  bottom of the screen. Hidden parts of a window stay snow-free. By default they never stop
+- **Drifts** pile up on the visible top edges of windows, on the Dock, on desktop icons and widgets,
+  and along the bottom of the screen. Hidden parts of a window stay snow-free. By default they never stop
   growing: snow keeps piling up into hills (only the top of the screen limits them), and snowmen
   ride on top. A fixed maximum height can be set instead.
 - **Move a window** and its drift breaks off as a slab that crumbles into clumps with a puff of
@@ -29,8 +29,8 @@ goes straight through the snow.
 - **Drag a snowman** anywhere – onto a window, next to the Dock, wherever. It drops onto whatever is
   below, and if that window moves, it falls again.
 - **Temperature** from −25 °C to +10 °C. Above zero the snow gets wet and drifts, icicles and
-  snowmen melt; above +4 °C it turns to sleet. Below zero nothing melts, icicles grow faster and
-  windows frost over from the corners – the colder, the more.
+  snowmen melt; above +4 °C it turns to sleet. Below zero nothing melts, icicles grow faster, longer
+  (up to about 3× in hard frost) and thicker, and windows frost over from the corners – the colder, the more.
 - **Stays out of your way:** snow at the bottom and on the Dock hides behind windows, so a zoomed
   window is never covered, and a snowman that covers a window fades out and lets clicks through.
 - **Christmas mode:** a decorated tree with twinkling lights, a glowing star and presents next to
@@ -46,7 +46,7 @@ Open **Settings…** (⌘,) from the snowflake in the menu bar:
 | Tab | What you can change |
 |---|---|
 | Snowfall | Preset, temperature, density, max number of flakes, flake size, fall speed, wind, sparkle, snow color |
-| Drifts | Where snow settles, unlimited hills or a max drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
+| Drifts | Where snow settles (windows, Dock, icons, widgets, menu bar), unlimited hills or a max drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
 | Snowman | On/off, number of snowmen, size, break between snowmen, fade when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often it throws |
 | Christmas | Christmas mode, tree and its size, lights under the menu bar, light style, Santa hats |
 | Other | Cursor interaction, frosted edges, full-screen pause, 30 / 60 / 120 fps, launch at login, restore defaults |
@@ -73,8 +73,8 @@ cd iSnow
 
 ## Permissions and privacy
 
-- **No permission is needed for snow on windows.** Window positions come from `CGWindowList`; the
-  app reads where windows are, never what is inside them. No Screen Recording permission is used.
+- **No permission is needed for snow on windows and desktop widgets.** Their positions come from
+  `CGWindowList`; the app reads where they are, never what is inside them. No Screen Recording permission is used.
 - **Snow on the Dock and desktop icons** needs *Accessibility* permission (to read the Dock's and
   the desktop icons' positions). The menu offers a button that opens the system prompt. Without it,
   everything else still works.

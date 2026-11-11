@@ -14,18 +14,20 @@ final class Tracker {
     private(set) var overlayOccluders: [CGRect] = []     // menus, popovers, notifications…
     private(set) var dockFrame: CGRect?
     private(set) var icons: [CGRect] = []
+    private(set) var widgets: [TrackedWindow] = []     // desktop widgets (WidgetKit, macOS 14+)
     private var axBusy = false
     private let ownPID = getpid()
 
     static var primaryHeight: CGFloat { NSScreen.screens.first?.frame.height ?? 0 }
 
     /// Cheap window query (CGWindowList, no permission needed), called ~5× per second.
+    /// Also finds desktop widgets.
     func refreshWindows() {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-                                                    kCGNullWindowID) as? [[String: Any]] else { return }
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return }
         let h = Self.primaryHeight
         var ws: [TrackedWindow] = []
         var occ: [CGRect] = []
+        var wid: [TrackedWindow] = []
         ws.reserveCapacity(list.count)
         for d in list {
             guard let pid = d[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
@@ -34,7 +36,15 @@ final class Tracker {
                   let b = CGRect(dictionaryRepresentation: raw as! CFDictionary) else { continue }
             if (d[kCGWindowAlpha as String] as? Double ?? 1) < 0.05 { continue }
             let r = CGRect(x: b.minX, y: h - b.maxY, width: b.width, height: b.height)
-            if layer == 0 {
+            if layer < 0 {
+                // Desktop widgets live in Notification Center's desktop-level windows. The window is
+                // the widget's grid cell; the visible widget is inset by about 11 points.
+                if (d[kCGWindowOwnerName as String] as? String) == "Notification Center",
+                   b.width >= 100, b.height >= 100, b.width < 1000,
+                   let id = d[kCGWindowNumber as String] as? Int {
+                    wid.append(TrackedWindow(id: id, frame: r.insetBy(dx: 11, dy: 11)))
+                }
+            } else if layer == 0 {
                 if b.width >= 60 && b.height >= 40, let id = d[kCGWindowNumber as String] as? Int {
                     ws.append(TrackedWindow(id: id, frame: r))
                 }
@@ -45,6 +55,7 @@ final class Tracker {
         }
         windows = ws
         overlayOccluders = occ
+        widgets = wid
     }
 
     /// Dock and desktop icons via Accessibility – off the main thread, once per second.

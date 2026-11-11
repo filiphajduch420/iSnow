@@ -270,7 +270,10 @@ struct Snowman {
         let rim: RGBA = (0.78, 0.84, 0.94, 1)
         let dark: RGBA = (0.13, 0.13, 0.17, 1)
         let brown: RGBA = (0.38, 0.25, 0.14, 1)
-        let s = sizeScale
+        // Details shrink with the body while it melts, and the accessories drop away.
+        let s = sizeScale * scale
+        let fade: Float = phase == .melting ? max(0, 1 - t / 2.5) : 1
+        let dress = self.dress * fade
 
         if phase != .absent {
             // Arms behind the body
