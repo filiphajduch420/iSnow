@@ -14,6 +14,7 @@ final class Tracker {
     private(set) var overlayOccluders: [CGRect] = []     // menus, popovers, notifications…
     private(set) var dockFrame: CGRect?
     private(set) var dockEstimated = false        // frame guessed from the Dock's preferences (no AX)
+    private(set) var dockAvoid: CGRect?           // area kept free of other snow (wider when guessed)
     private(set) var icons: [CGRect] = []
     private(set) var widgets: [TrackedWindow] = []     // desktop widgets (WidgetKit, macOS 14+)
     private var axBusy = false
@@ -64,7 +65,8 @@ final class Tracker {
         Settings.shared.axTrusted = AXIsProcessTrusted()
         guard Settings.shared.axTrusted, !axBusy else {
             if !Settings.shared.axTrusted {
-                dockFrame = Self.estimatedDockFrame()
+                dockFrame = Self.estimatedDockFrame(includeMinimized: false)
+                dockAvoid = Self.estimatedDockFrame(includeMinimized: true)
                 dockEstimated = dockFrame != nil
                 icons = []
             }
@@ -76,7 +78,8 @@ final class Tracker {
             let dock = wantDock ? AXProbe.dockFrame(primaryHeight: h) : nil
             let icons = wantIcons ? AXProbe.desktopIcons(primaryHeight: h) : nil
             await MainActor.run {
-                self.dockFrame = dock ?? Self.estimatedDockFrame()
+                self.dockFrame = dock ?? Self.estimatedDockFrame(includeMinimized: false)
+                self.dockAvoid = dock ?? Self.estimatedDockFrame(includeMinimized: true)
                 self.dockEstimated = dock == nil && self.dockFrame != nil
                 if let icons { self.icons = icons }
                 self.axBusy = false
@@ -87,7 +90,9 @@ final class Tracker {
 
     /// Without Accessibility the Dock's frame is estimated: it is centred at the bottom of the screen,
     /// as tall as the visible frame's bottom inset, and about one tile per item wide.
-    static func estimatedDockFrame() -> CGRect? {
+    /// `includeMinimized: false` gives a width the Dock surely has (snow on the Dock, snowmen);
+    /// `true` adds minimized windows (over-counted, so it is a safe area to keep free).
+    static func estimatedDockFrame(includeMinimized: Bool) -> CGRect? {
         let d = UserDefaults(suiteName: "com.apple.dock")
         guard (d?.string(forKey: "orientation") ?? "bottom") == "bottom",
               let screen = NSScreen.screens.first(where: { $0.visibleFrame.minY - $0.frame.minY > 20 }) else { return nil }
@@ -107,10 +112,32 @@ final class Tracker {
         let showRecents = d?.object(forKey: "show-recents") as? Bool ?? true
         let recents = showRecents ? (d?.array(forKey: "recent-apps")?.count ?? 0) : 0
         let others = d?.array(forKey: "persistent-others")?.count ?? 0
-        let items = 1 + pinned.count + running + recents + others + 1          // Finder … Trash
-        let separators: CGFloat = recents > 0 ? 2 : 1
-        let width = CGFloat(items) * (tile + 2) + separators * tile * 0.35 + 16
+        let minimized = includeMinimized ? minimizedWindowCount() : 0
+        let items = 1 + pinned.count + running + recents + others + minimized + 1     // Finder … Trash
+        let separators: CGFloat = 1 + (recents > 0 ? 1 : 0) + (minimized > 0 && others == 0 ? 1 : 0)
+        let width = CGFloat(items) * tile * 1.12 + separators * tile * 0.5 + 24
         return CGRect(x: screen.frame.midX - width / 2, y: screen.frame.minY + 2, width: width, height: height - 2)
+    }
+
+    /// Minimized windows show up in the Dock. They are off screen but still belong to running apps;
+    /// windows on other Spaces look the same, so the count is capped.
+    static func minimizedWindowCount() -> Int {
+        guard let all = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return 0 }
+        let regular = Set(NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+            .map { $0.processIdentifier })
+        var n = 0
+        for w in all {
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowIsOnscreen as String] as? Bool) != true,
+                  let pid = w[kCGWindowOwnerPID as String] as? Int32, regular.contains(pid),
+                  let raw = w[kCGWindowBounds as String],
+                  let b = CGRect(dictionaryRepresentation: raw as! CFDictionary),
+                  b.width > 200, b.height > 150,
+                  (w[kCGWindowName as String] as? String).map({ !$0.isEmpty }) ?? true else { continue }
+            n += 1
+        }
+        return min(n, 8)
     }
 
     static func requestAccessibility() {

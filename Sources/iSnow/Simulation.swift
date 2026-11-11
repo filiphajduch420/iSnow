@@ -101,6 +101,8 @@ final class Simulation {
     private var dockLocal: CGRect?
     private var treePos: (x: Float, y: Float)?
     private var noIcicles: CGRect?          // the Dock (plus a margin): icicles never hang into it
+    private var dockGuessed = false         // the Dock's frame is only estimated (no Accessibility)
+    private var avoidLocal: CGRect?         // area around the Dock kept free of other snow
     private var treeGhost = false
 
     private var time: Double = 0
@@ -133,7 +135,8 @@ final class Simulation {
     /// Returns true when something changed and a redraw is needed.
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
-              widgets: [TrackedWindow] = [], dockEstimated: Bool = false, now: Double, cfg: SimConfig) -> Bool {
+              widgets: [TrackedWindow] = [], dockEstimated: Bool = false, dockAvoid: CGRect? = nil,
+              now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
             || cfg.unlimitedDrifts != self.cfg.unlimitedDrifts
@@ -186,7 +189,12 @@ final class Simulation {
             return p
         }
 
-        noIcicles = dock.map { $0.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -6, dy: -10) }
+        dockGuessed = dockEstimated
+        // An estimated Dock may be wider than we think – keep a generous margin around it.
+        let dockMargin: CGFloat = dockEstimated ? 30 : 6
+        let avoid = (dockAvoid ?? dock)?.offsetBy(dx: -origin.x, dy: -origin.y)
+        noIcicles = avoid?.insetBy(dx: -dockMargin, dy: -10)
+        avoidLocal = avoid
         // Windows (front to back); a window is occluded by the windows in front of it.
         var front: [CGRect] = localOcc
         var rects: [(key: Int, rect: CGRect)] = []
@@ -240,7 +248,7 @@ final class Simulation {
         }
         // Bottom edge of the screen
         let g = upsert(key: Self.groundKey, kind: .ground, rect: CGRect(x: 0, y: -1, width: size.width, height: 1))
-        if updateGroundVisibility(g, dock: dockLocal, margin: dockEstimated ? 24 : 4, windows: front) { changed = true }
+        if updateGroundVisibility(g, dock: avoidLocal ?? dockLocal, margin: dockEstimated ? 30 : 4, windows: front) { changed = true }
         order.append(g)
 
         for (k, p) in piles where !seen.contains(k) {
@@ -852,8 +860,10 @@ final class Simulation {
         let s = Float(cfg.treeSize)
         var x: Float
         if let d = dockLocal, d.minY < size.height / 2 {
-            x = Float(d.minX) - 62 * s
-            if x < 50 * s { x = Float(d.maxX) + 62 * s }
+            let a = avoidLocal ?? d
+            let margin: Float = dockGuessed ? 30 : 0
+            x = Float(a.minX) - 62 * s - margin
+            if x < 50 * s { x = Float(a.maxX) + 62 * s + margin }
         } else {
             x = W * 0.12
         }
@@ -871,6 +881,12 @@ final class Simulation {
     /// Default spot for snowman i: along the top of the Dock from the right, then beside the Dock.
     private func slot(_ i: Int, size sz: Float) -> (key: Int, x: Float, y: Float) {
         let gap = 64 * sz
+        if let d = dockLocal, d.minY < size.height / 2, dockGuessed {
+            // Only a guess of where the Dock is: keep every snowman on top of its middle part.
+            let count = Float(max(1, snowmen.count))
+            let row = min(gap, Float(d.width) * 0.75 / count)
+            return (Self.dockKey, Float(d.midX) + (count - 1) * row * 0.5 - Float(i) * row, Float(d.maxY))
+        }
         if let d = dockLocal, d.minY < size.height / 2 {
             let x = Float(d.maxX) - 46 * sz - Float(i) * gap
             if x > Float(d.minX) + 20 * sz { return (Self.dockKey, x, Float(d.maxY)) }

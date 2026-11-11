@@ -72,6 +72,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var axTick = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--print-dock") {
+            // Debug: show the Dock frame estimated without Accessibility.
+            print("estimated Dock:", Tracker.estimatedDockFrame(includeMinimized: false).map { "\($0)" } ?? "none",
+                  "safe area:", Tracker.estimatedDockFrame(includeMinimized: true).map { "\($0)" } ?? "none",
+                  "minimized windows:", Tracker.minimizedWindowCount())
+            exit(0)
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
             Snapshot.run(path: CommandLine.arguments[i + 1])
             exit(0)
@@ -178,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             o.fps = cfg.fps
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
                           icons: tracker.icons, widgets: tracker.widgets, dockEstimated: tracker.dockEstimated,
+                          dockAvoid: tracker.dockAvoid,
                           now: now, cfg: cfg) || o.sim.isAnimating {
                 o.wake()
             }
