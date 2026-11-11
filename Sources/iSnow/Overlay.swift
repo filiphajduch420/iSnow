@@ -26,7 +26,8 @@ final class Overlay: NSObject {
     init(screen: NSScreen, renderer: Renderer, hostsSnowman: Bool) {
         screenID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
         self.renderer = renderer
-        sim = Simulation(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, hostsSnowman: hostsSnowman)
+        sim = Simulation(screenFrame: screen.frame, visibleFrame: screen.visibleFrame, hostsSnowman: hostsSnowman,
+                         safeTop: screen.safeAreaInsets.top)
         window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         view = MetalView(frame: CGRect(origin: .zero, size: screen.frame.size))
         super.init()

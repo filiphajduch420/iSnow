@@ -9,7 +9,8 @@ enum Snapshot {
         let size = CGSize(width: 1200, height: 760)
         let screen = CGRect(origin: .zero, size: size)
         let visible = CGRect(x: 0, y: 64, width: 1200, height: 668)
-        let sim = Simulation(screenFrame: screen, visibleFrame: visible, hostsSnowman: true)
+        let notchFull = ProcessInfo.processInfo.environment["ISNOW_NOTCHFULL"] != nil
+        let sim = Simulation(screenFrame: screen, visibleFrame: visible, hostsSnowman: true, safeTop: notchFull ? 32 : 0)
         var wins = [TrackedWindow(id: 1, frame: CGRect(x: 140, y: 250, width: 520, height: 360)),
                     TrackedWindow(id: 2, frame: CGRect(x: 560, y: 160, width: 470, height: 330))]
         if ProcessInfo.processInfo.environment["ISNOW_MAX"] != nil {
@@ -35,7 +36,13 @@ enum Snapshot {
         let widgets = widgetEnv == nil ? [] : [TrackedWindow(id: 9, frame: CGRect(x: 1060, y: 330, width: 120, height: 120))]
         if let w = widgetEnv { cfg.onWidgets = w == "1" }
         while t < seconds {
-            sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, widgets: widgets, now: t, cfg: cfg)
+            if notchFull && t > 60 {
+                // From now on a full-screen window fills everything below the notch; no menu bar.
+                let full = [TrackedWindow(id: 50, frame: CGRect(x: 0, y: 0, width: size.width, height: size.height - 32))]
+                sim.sync(windows: full, occluders: [], dock: dock, icons: icons, widgets: widgets, menuBars: [], now: t, cfg: cfg)
+            } else {
+                sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, widgets: widgets, now: t, cfg: cfg)
+            }
             sim.step(dt: dt, now: t)
             t += dt
         }

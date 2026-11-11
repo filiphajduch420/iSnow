@@ -17,6 +17,7 @@ final class Tracker {
     private(set) var dockAvoid: CGRect?           // area kept free of other snow (wider when guessed)
     private(set) var icons: [CGRect] = []
     private(set) var widgets: [TrackedWindow] = []     // desktop widgets (WidgetKit, macOS 14+)
+    private(set) var menuBars: [CGRect] = []           // visible menu bars (hidden in full-screen spaces)
     private var axBusy = false
     private let ownPID = getpid()
 
@@ -30,6 +31,7 @@ final class Tracker {
         var ws: [TrackedWindow] = []
         var occ: [CGRect] = []
         var wid: [TrackedWindow] = []
+        var bars: [CGRect] = []
         ws.reserveCapacity(list.count)
         for d in list {
             guard let pid = d[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
@@ -50,7 +52,9 @@ final class Tracker {
                 if b.width >= 60 && b.height >= 40, let id = d[kCGWindowNumber as String] as? Int {
                     ws.append(TrackedWindow(id: id, frame: r))
                 }
-            } else if layer > 0, layer < 1000, layer != 20, layer != 24, layer != 25,
+            } else if layer == 24 || layer == 25 {
+                if b.height < 80 { bars.append(r) }       // the menu bar's backdrop and items
+            } else if layer > 0, layer < 1000, layer != 20,
                       (d[kCGWindowOwnerName as String] as? String) != "Window Server" {
                 occ.append(r)
             }
@@ -58,6 +62,7 @@ final class Tracker {
         windows = ws
         overlayOccluders = occ
         widgets = wid
+        menuBars = bars
     }
 
     /// Dock and desktop icons via Accessibility – off the main thread, once per second.

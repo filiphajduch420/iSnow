@@ -191,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             o.fps = cfg.fps
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
                           icons: tracker.icons, widgets: tracker.widgets, dockEstimated: tracker.dockEstimated,
-                          dockAvoid: tracker.dockAvoid,
+                          dockAvoid: tracker.dockAvoid, menuBars: tracker.menuBars,
                           now: now, cfg: cfg) || o.sim.isAnimating {
                 o.wake()
             }

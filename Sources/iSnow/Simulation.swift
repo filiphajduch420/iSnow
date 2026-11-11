@@ -117,9 +117,13 @@ final class Simulation {
     private(set) var windowMoving = false
     private var tint: (Float, Float, Float) = (1, 1, 1)
 
-    init(screenFrame: CGRect, visibleFrame: CGRect, hostsSnowman: Bool) {
+    /// Height of the camera housing (notch) – full-screen windows end below it.
+    let safeTop: CGFloat
+
+    init(screenFrame: CGRect, visibleFrame: CGRect, hostsSnowman: Bool, safeTop: CGFloat = 0) {
         origin = screenFrame.origin
         size = screenFrame.size
+        self.safeTop = safeTop
         menuBarHeight = max(0, screenFrame.maxY - visibleFrame.maxY)
         dockBottomGuess = max(0, visibleFrame.minY - screenFrame.minY)
         self.hostsSnowman = hostsSnowman
@@ -136,7 +140,7 @@ final class Simulation {
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
               widgets: [TrackedWindow] = [], dockEstimated: Bool = false, dockAvoid: CGRect? = nil,
-              now: Double, cfg: SimConfig) -> Bool {
+              menuBars: [CGRect]? = nil, now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
             || cfg.unlimitedDrifts != self.cfg.unlimitedDrifts
@@ -145,11 +149,28 @@ final class Simulation {
         var changed = tintChanged || capsChanged
         let bounds = CGRect(origin: .zero, size: size)
         let wasFull = fullscreen
+        // Full screen: a window covers the whole screen – or, on a Mac with a notch, everything below
+        // the notch while the menu bar is hidden (a zoomed window keeps the menu bar visible).
+        let screenGlobal = CGRect(origin: origin, size: size)
+        let menuVisible = menuBars.map { bars in
+            bars.contains { $0.intersects(screenGlobal) && $0.maxY >= screenGlobal.maxY - 2 && $0.minY > screenGlobal.maxY - 90 }
+        } ?? true
+        let topGap = max(safeTop, menuBarHeight) + 1
         fullscreen = cfg.pauseFullscreen && windows.contains { w in
             let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
-            return r.minX <= 1 && r.minY <= 1 && r.maxX >= size.width - 1 && r.maxY >= size.height - 1
+            guard r.minX <= 1, r.minY <= 1, r.maxX >= size.width - 1 else { return false }
+            return r.maxY >= size.height - 1 || (!menuVisible && r.maxY >= size.height - topGap)
         }
-        if fullscreen != wasFull { changed = true }
+        if fullscreen != wasFull {
+            changed = true
+            if fullscreen {
+                // Clear the air at once so nothing drifts over a video or presentation.
+                flakes.removeAll(keepingCapacity: true)
+                debris.removeAll(keepingCapacity: true)
+                snowballs.removeAll()
+                shards.removeAll()
+            }
+        }
         windowMoving = false
         var seen = Set<Int>()
         var order: [Pile] = []
