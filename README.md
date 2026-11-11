@@ -9,7 +9,7 @@ goes straight through the snow.
 
 ![iSnow – snow drifts on windows, icicles and snowmen on the Dock](media/hero.png)
 
-**Current version: 1.0** · macOS 14 Sonoma or later · Apple silicon and Intel · about 1 MB
+**Current version: 1.0** · macOS 14 Sonoma or later · Apple silicon and Intel · about 1 MB · [MIT License](LICENSE)
 
 ## Install
 
@@ -195,3 +195,7 @@ Christmas mode with the given light style.
 
 Issues and pull requests are welcome. Please keep the app lightweight: no third-party
 dependencies, no extra assets, and nothing that runs when nothing is moving.
+
+## License
+
+[MIT](LICENSE) © 2026 Filip Hajduch
