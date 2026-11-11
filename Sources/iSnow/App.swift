@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 @main
-struct VlockaApp: App {
+struct ISnowApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var settings = Settings.shared
 
     var body: some Scene {
-        MenuBarExtra("Vločka", systemImage: settings.paused ? "snowflake.slash" : "snowflake") {
+        MenuBarExtra("iSnow", systemImage: settings.paused ? "snowflake.slash" : "snowflake") {
             MenuContent(settings: settings, delegate: delegate)
         }
         .menuBarExtraStyle(.menu)
@@ -51,7 +51,7 @@ struct MenuContent: View {
         SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
         Divider()
-        Button("Quit Vločka") { NSApp.terminate(nil) }
+        Button("Quit iSnow") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }
@@ -74,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
         guard let r = Renderer() else {
-            NSLog("Vločka: Metal is not available")
+            NSLog("iSnow: Metal is not available")
             NSApp.terminate(nil)
             return
         }

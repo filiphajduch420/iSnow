@@ -114,6 +114,11 @@ final class Settings {
     var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
 
     private init() {
+        // Carry settings over from the app's previous name (Vločka).
+        if UserDefaults.standard.data(forKey: "config") == nil,
+           let old = UserDefaults(suiteName: "local.vlocka.app")?.data(forKey: "config") {
+            UserDefaults.standard.set(old, forKey: "config")
+        }
         config = SimConfig.load(from: .standard)
     }
 
@@ -139,7 +144,7 @@ final class Settings {
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
         } catch {
-            NSLog("Vločka: login item – \(error.localizedDescription)")
+            NSLog("iSnow: login item – \(error.localizedDescription)")
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
     }

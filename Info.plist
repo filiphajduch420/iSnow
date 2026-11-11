@@ -4,10 +4,10 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleLocalizations</key><array><string>en</string><string>cs</string></array>
-    <key>CFBundleName</key><string>Vločka</string>
-    <key>CFBundleDisplayName</key><string>Vločka</string>
-    <key>CFBundleExecutable</key><string>Vlocka</string>
-    <key>CFBundleIdentifier</key><string>local.vlocka.app</string>
+    <key>CFBundleName</key><string>iSnow</string>
+    <key>CFBundleDisplayName</key><string>iSnow</string>
+    <key>CFBundleExecutable</key><string>iSnow</string>
+    <key>CFBundleIdentifier</key><string>io.github.filiphajduch420.isnow</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1</string>
     <key>CFBundleVersion</key><string>1</string>

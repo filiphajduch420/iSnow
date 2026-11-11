@@ -1,7 +1,7 @@
-# Vločka ❄️
+# iSnow ❄️
 
-**It snows on your Mac.** Vločka (Czech for *snowflake*) is a tiny menu bar app that lets snow fall
-over everything on your screen. Snow settles on top of your windows, the Dock, desktop icons and the
+**It snows on your Mac.** iSnow is a tiny menu bar app that lets snow fall over everything on
+your screen. Snow settles on top of your windows, the Dock, desktop icons and the
 menu bar, icicles grow under windows you leave alone, and a snowman builds itself on the Dock.
 
 It is not a wallpaper or a screensaver – it snows on top of whatever you are doing, and every click
@@ -58,12 +58,12 @@ There are no prebuilt releases yet, so build it from source. You need Xcode or t
 Line Tools (Swift 6):
 
 ```sh
-git clone https://github.com/filiphajduch420/vlocka-mac.git
-cd vlocka-mac
-./build.sh --install     # builds Vločka.app, copies it to ~/Applications and launches it
+git clone https://github.com/filiphajduch420/iSnow.git
+cd iSnow
+./build.sh --install     # builds iSnow.app, copies it to ~/Applications and launches it
 ```
 
-`./build.sh` without arguments only builds `build/Vločka.app`.
+`./build.sh` without arguments only builds `build/iSnow.app`.
 
 ## Permissions and privacy
 
@@ -78,7 +78,7 @@ Because the app is signed ad hoc, macOS may ask for Accessibility permission aga
 
 ## Performance
 
-Vločka is built to stay out of the way:
+iSnow is built to stay out of the way:
 
 - one instanced Metal draw call for all particles and one for all triangles (drifts, icicles,
   snowman); shaders are compiled from source, so there are no textures or other assets;
@@ -114,13 +114,13 @@ that can land on surfaces further down.
 
 ```sh
 swift build -c release
-.build/release/Vlocka --snapshot /tmp/vlocka.png
+.build/release/iSnow --snapshot /tmp/isnow.png
 ```
 
 This simulates a scene with fake windows, a Dock and icons and saves it as an image – handy for
-checking rendering without screen recording permission. `VLOCKA_TEMP=3` sets the temperature,
-`VLOCKA_SNOWMEN=2` the number of snowmen, `VLOCKA_MAX=1` uses a single zoomed window and
-`VLOCKA_DRAG=14` drags a window for 14 frames and captures the snow falling off.
+checking rendering without screen recording permission. `ISNOW_TEMP=3` sets the temperature,
+`ISNOW_SNOWMEN=2` the number of snowmen, `ISNOW_MAX=1` uses a single zoomed window and
+`ISNOW_DRAG=14` drags a window for 14 frames and captures the snow falling off.
 
 ## Contributing
 

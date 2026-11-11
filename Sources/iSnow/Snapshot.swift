@@ -1,7 +1,7 @@
 import AppKit
 import Metal
 
-/// Debug mode: `Vlocka --snapshot out.png` simulates a scene with fake windows and saves an image.
+/// Debug mode: `iSnow --snapshot out.png` simulates a scene with fake windows and saves an image.
 @MainActor
 enum Snapshot {
     static func run(path: String) {
@@ -12,7 +12,7 @@ enum Snapshot {
         let sim = Simulation(screenFrame: screen, visibleFrame: visible, hostsSnowman: true)
         var wins = [TrackedWindow(id: 1, frame: CGRect(x: 140, y: 250, width: 520, height: 360)),
                     TrackedWindow(id: 2, frame: CGRect(x: 560, y: 160, width: 470, height: 330))]
-        if ProcessInfo.processInfo.environment["VLOCKA_MAX"] != nil {
+        if ProcessInfo.processInfo.environment["ISNOW_MAX"] != nil {
             // A zoomed window filling the visible frame (down to the Dock).
             wins = [TrackedWindow(id: 3, frame: CGRect(x: 0, y: 62, width: 1200, height: 666))]
         }
@@ -22,8 +22,8 @@ enum Snapshot {
         cfg.apply(.blizzard)
         cfg.frost = true
         let env = ProcessInfo.processInfo.environment
-        cfg.temperature = Double(env["VLOCKA_TEMP"] ?? "") ?? -15
-        cfg.snowmanCount = Double(env["VLOCKA_SNOWMEN"] ?? "") ?? 3
+        cfg.temperature = Double(env["ISNOW_TEMP"] ?? "") ?? -15
+        cfg.snowmanCount = Double(env["ISNOW_SNOWMEN"] ?? "") ?? 3
         cfg.sparkle = true
         var t = 0.0
         let dt = 1.0 / 30
@@ -32,7 +32,7 @@ enum Snapshot {
             sim.step(dt: dt, now: t)
             t += dt
         }
-        if let drag = ProcessInfo.processInfo.environment["VLOCKA_DRAG"], let frames = Int(drag) {
+        if let drag = ProcessInfo.processInfo.environment["ISNOW_DRAG"], let frames = Int(drag) {
             // Drag window 1 to the right and capture the snow mid-fall.
             for f in 1...frames {
                 let w0 = wins[0].frame

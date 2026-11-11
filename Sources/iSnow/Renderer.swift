@@ -70,7 +70,7 @@ final class Renderer {
             particlePipeline = try pipeline("particle_vs", "particle_fs")
             meshPipeline = try pipeline("mesh_vs", "mesh_fs")
         } catch {
-            NSLog("Vločka: shader error – \(error)")
+            NSLog("iSnow: shader error – \(error)")
             return nil
         }
     }

@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Vlocka",
+    name: "iSnow",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "Vlocka",
-            path: "Sources/Vlocka",
+            name: "iSnow",
+            path: "Sources/iSnow",
             swiftSettings: [.unsafeFlags(["-enforce-exclusivity=unchecked"], .when(configuration: .release))]
         )
     ]
