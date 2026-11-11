@@ -76,13 +76,29 @@ cd iSnow
 ## Permissions and privacy
 
 - **No permission is needed for snow on windows and desktop widgets.** Their positions come from
-  `CGWindowList`; the app reads where they are, never what is inside them. No Screen Recording permission is used.
-- **Snow on the Dock and desktop icons** needs *Accessibility* permission (to read the Dock's and
-  the desktop icons' positions). The menu offers a button that opens the system prompt. Without it,
-  everything else still works.
+  `CGWindowList`; the app reads where they are, never what is inside them. No Screen Recording
+  permission is used.
+- **The exact position of the Dock and snow on desktop icons** need *Accessibility* permission (to
+  read the Dock's and the desktop icons' positions). Without it, everything else still works and
+  the Dock's position is estimated from its preferences – usually close, but it can be off by an
+  icon or two.
 - No network access, no analytics, nothing leaves your Mac. Settings are stored in `UserDefaults`.
 
-Because the app is signed ad hoc, macOS may ask for Accessibility permission again after you rebuild it.
+### Allowing Accessibility
+
+1. Click the snowflake in the menu bar and choose **Allow Snow on the Dock and Icons…**
+   (or open **Settings… → Drifts → Allow…**). macOS shows a prompt – click **Open System Settings**.
+2. If the prompt doesn't appear, open **System Settings → Privacy & Security → Accessibility** yourself.
+3. Turn on the switch next to **iSnow**. If iSnow isn't listed, click **+** at the bottom of the list,
+   choose **iSnow** in your **Applications** folder (`~/Applications` if you used `./build.sh --install`)
+   and click **Open**.
+4. Confirm with Touch ID or your password. Within a second the snowmen line up along the whole Dock
+   and snow starts settling on your desktop icons – no restart needed.
+
+**After rebuilding the app:** iSnow is signed ad hoc, so every new build looks like a different app to
+macOS and the switch may stop working even though it still shows as on. Select **iSnow** in the
+list, remove it with **−**, and add it again (step 3). If you used an older version called *Vločka*,
+you can remove that entry too.
 
 ## Performance
 
