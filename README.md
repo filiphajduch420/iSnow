@@ -11,7 +11,9 @@ goes straight through the snow.
 
 - **Snowfall** with parallax depth, gusty wind and four presets: Flurry, Normal, Blizzard, Snowstorm.
 - **Drifts** pile up on the visible top edges of windows, on the Dock, on desktop icons and along the
-  bottom of the screen. Hidden parts of a window stay snow-free.
+  bottom of the screen. Hidden parts of a window stay snow-free. By default they never stop
+  growing: snow keeps piling up into hills (only the top of the screen limits them), and snowmen
+  ride on top. A fixed maximum height can be set instead.
 - **Move a window** and its drift breaks off as a slab that crumbles into clumps with a puff of
   powder, carried a little in the direction you dragged it. The clumps land on whatever is below and
   pile up again. A small nudge only shakes off the loose top layer. Close a window and all of it falls.
@@ -41,7 +43,7 @@ Open **Settings…** (⌘,) from the snowflake in the menu bar:
 | Tab | What you can change |
 |---|---|
 | Snowfall | Preset, temperature, density, max number of flakes, flake size, fall speed, wind, sparkle, snow color |
-| Drifts | Where snow settles, max drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
+| Drifts | Where snow settles, unlimited hills or a max drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
 | Snowman | On/off, number of snowmen, size, break between snowmen, fade when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often it throws |
 | Other | Cursor interaction, frosted edges, full-screen pause, 30 / 60 / 120 fps, launch at login, restore defaults |
 
@@ -120,7 +122,8 @@ swift build -c release
 This simulates a scene with fake windows, a Dock and icons and saves it as an image – handy for
 checking rendering without screen recording permission. `ISNOW_TEMP=3` sets the temperature,
 `ISNOW_SNOWMEN=2` the number of snowmen, `ISNOW_MAX=1` uses a single zoomed window and
-`ISNOW_DRAG=14` drags a window for 14 frames and captures the snow falling off.
+`ISNOW_DRAG=14` drags a window for 14 frames and captures the snow falling off, and
+`ISNOW_SECONDS=600` simulates ten minutes of snowfall first.
 
 ## Contributing
 

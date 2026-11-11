@@ -132,6 +132,7 @@ final class Simulation {
               now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
+            || cfg.unlimitedDrifts != self.cfg.unlimitedDrifts
         self.cfg = cfg
         tint = (Float(cfg.tint[safe: 0] ?? 1), Float(cfg.tint[safe: 1] ?? 1), Float(cfg.tint[safe: 2] ?? 1))
         var changed = tintChanged || capsChanged
@@ -174,7 +175,7 @@ final class Simulation {
                 return p
             }
             let p = Pile(key: key, kind: kind, rect: r, binW: Self.binW, now: now)
-            p.cap = capFor(kind)
+            p.cap = capFor(p)
             p.lastSeen = now
             piles[key] = p
             changed = true
@@ -231,21 +232,46 @@ final class Simulation {
         }
         landables = order
         rebuildColumns()
-        if capsChanged || tintChanged {
-            for p in order { p.cap = capFor(p.kind); p.dirty = true; p.bins = p.bins.map { min($0, p.cap) } }
+        for p in order {
+            // Caps depend on where the surface is (an unlimited drift may grow up to the screen top).
+            let cap = capFor(p)
+            if cap != p.cap || capsChanged || tintChanged {
+                p.cap = cap
+                p.dirty = true
+                if p.bins.contains(where: { $0 > cap }) { p.bins = p.bins.map { min($0, cap) } }
+            }
         }
         if hostsSnowman { syncSnowmen() }
         return changed
     }
 
-    private func capFor(_ k: SurfaceKind) -> Float {
+    private func capFor(_ p: Pile) -> Float {
+        let roof = max(0, H - Float(menuBarHeight) - Float(p.rect.maxY) - 2)   // room up to the menu bar
+        if cfg.unlimitedDrifts {
+            switch p.kind {
+            case .window, .dock: return roof
+            case .ground: return max(0, roof - 30)
+            case .icon: return min(Float(cfg.windowDepth) * 0.4, 22)
+            }
+        }
         let w = Float(cfg.windowDepth)
-        switch k {
+        switch p.kind {
         case .window: return w
         case .dock: return min(w * 0.55, 34)
         case .icon: return min(w * 0.4, 22)
         case .ground: return Float(cfg.groundDepth)
         }
+    }
+
+    /// Height of the drift on surface `key` at x (0 if none).
+    private func driftHeight(_ key: Int, at x: Float) -> Float {
+        guard let p = piles[key] else { return 0 }
+        let b = Int((x - Float(p.rect.minX)) / Self.binW)
+        guard b >= 0, b < p.bins.count else { return 0 }
+        // Average a few bins so a snowman doesn't jitter on a bumpy drift.
+        var sum: Float = 0, n: Float = 0
+        for k in max(0, b - 2)...min(p.bins.count - 1, b + 2) { sum += p.bins[k]; n += 1 }
+        return sum / n
     }
 
     private func updateVisibility(_ p: Pile, occluders: [CGRect]) -> Bool {
@@ -819,12 +845,12 @@ final class Simulation {
                 let sl = slot(i, size: sz)
                 s.hostKey = sl.key
                 s.anchorX = sl.x
-                s.baseY = sl.y
+                s.baseY = sl.y + driftHeight(sl.key, at: sl.x) * 0.85
                 s.hostRect = surfaceRect(sl.key)
             } else if let r = surfaceRect(s.hostKey), let old = s.hostRect,
                       abs(r.minX - old.minX) < 0.5, abs(r.maxY - old.maxY) < 0.5 {
                 s.anchorX = Float(r.minX) + s.offsetX
-                s.baseY = Float(r.maxY)
+                s.baseY = Float(r.maxY) + driftHeight(s.hostKey, at: s.anchorX) * 0.85
             } else if s.phase != .absent {
                 // The window it stood on moved or closed – it falls.
                 s.falling = true

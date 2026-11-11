@@ -138,8 +138,11 @@ private struct DriftTab: View {
                 }
             }
             Section("Drifts") {
+                Toggle("Unlimited – snow keeps piling up into hills", isOn: $settings.config.unlimitedDrifts)
                 ValueSlider(title: "Height on windows", value: $settings.config.windowDepth, range: 4...90, format: points)
+                    .disabled(settings.config.unlimitedDrifts)
                 ValueSlider(title: "Height at the bottom edge", value: $settings.config.groundDepth, range: 4...120, format: points)
+                    .disabled(settings.config.unlimitedDrifts)
                 ValueSlider(title: "Pile-up speed", value: $settings.config.accumulation, range: 0.3...8, format: times)
                 HStack {
                     Spacer()

@@ -27,7 +27,8 @@ enum Snapshot {
         cfg.sparkle = true
         var t = 0.0
         let dt = 1.0 / 30
-        while t < 75 {
+        let seconds = Double(ProcessInfo.processInfo.environment["ISNOW_SECONDS"] ?? "") ?? 75
+        while t < seconds {
             sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, now: t, cfg: cfg)
             sim.step(dt: dt, now: t)
             t += dt
