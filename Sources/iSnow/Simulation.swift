@@ -1056,6 +1056,10 @@ final class Simulation {
         return snowmen.map { $0.hitRect }
     }
 
+    func restartSnowmen() {
+        for i in snowmen.indices { snowmen[i].restart() }
+    }
+
     func buildSnowmanNow() {
         guard hostsSnowman else { return }
         for i in snowmen.indices { snowmen[i].buildNow() }

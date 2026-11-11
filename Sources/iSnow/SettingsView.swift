@@ -4,17 +4,27 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var settings: Settings
     let delegate: AppDelegate
+    @State private var tab: Int
+    private let activates: Bool
+
+    init(settings: Settings, delegate: AppDelegate, tab: Int = 0, activates: Bool = true) {
+        self.settings = settings
+        self.delegate = delegate
+        _tab = State(initialValue: tab)
+        self.activates = activates
+    }
 
     var body: some View {
-        TabView {
-            SnowTab(settings: settings).tabItem { Label("Snowfall", systemImage: "cloud.snow") }
-            DriftTab(settings: settings, delegate: delegate).tabItem { Label("Drifts", systemImage: "mountain.2") }
-            SnowmanTab(settings: settings, delegate: delegate).tabItem { Label("Snowman", systemImage: "figure.wave") }
-            ChristmasTab(settings: settings).tabItem { Label("Christmas", systemImage: "gift") }
-            ExtrasTab(settings: settings).tabItem { Label("Other", systemImage: "sparkles") }
+        TabView(selection: $tab) {
+            SnowTab(settings: settings).tabItem { Label("Snowfall", systemImage: "cloud.snow") }.tag(0)
+            DriftTab(settings: settings, delegate: delegate).tabItem { Label("Drifts", systemImage: "mountain.2") }.tag(1)
+            SnowmanTab(settings: settings, delegate: delegate).tabItem { Label("Snowman", systemImage: "figure.wave") }.tag(2)
+            ChristmasTab(settings: settings).tabItem { Label("Christmas", systemImage: "gift") }.tag(3)
+            ExtrasTab(settings: settings).tabItem { Label("Other", systemImage: "sparkles") }.tag(4)
         }
         .frame(width: 500)
         .onAppear {
+            guard activates else { return }
             NSApp.activate()
             DispatchQueue.main.async { NSApp.windows.first { $0.isVisible && $0.canBecomeKey }?.makeKeyAndOrderFront(nil) }
         }

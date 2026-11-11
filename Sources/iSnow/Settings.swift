@@ -105,6 +105,7 @@ final class Settings {
 
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var persists = true
 
     var config: SimConfig {
         didSet {
@@ -132,6 +133,13 @@ final class Settings {
         config = SimConfig.load(from: .standard)
     }
 
+    /// A throwaway instance for screenshots – never touches the user's saved settings.
+    init(preview: SimConfig) {
+        config = preview
+        persists = false
+        axTrusted = true
+    }
+
     func resetToDefaults() {
         let p = config.paused
         config = SimConfig()
@@ -140,6 +148,7 @@ final class Settings {
 
     private func scheduleSave() {
         // Sliders change values continuously – save with a short delay.
+        guard persists else { return }
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(400))

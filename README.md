@@ -1,11 +1,66 @@
 # iSnow ❄️
 
 **It snows on your Mac.** iSnow is a tiny menu bar app that lets snow fall over everything on
-your screen. Snow settles on top of your windows, the Dock, desktop icons and the
-menu bar, icicles grow under windows you leave alone, and a snowman builds itself on the Dock.
+your screen. Snow settles on top of your windows, the Dock, desktop icons and widgets, icicles grow
+under windows you leave alone, and snowmen build themselves on the Dock.
 
 It is not a wallpaper or a screensaver – it snows on top of whatever you are doing, and every click
 goes straight through the snow.
+
+![iSnow – snow drifts on windows, icicles and snowmen on the Dock](media/hero.png)
+
+**Current version: 1.0** · macOS 14 Sonoma or later · Apple silicon and Intel · about 1 MB
+
+## Install
+
+### Download (recommended)
+
+1. Download **`iSnow-v1.0.dmg`** (and `iSnow-v1.0.dmg.sha256`) from the
+   [Releases](https://github.com/filiphajduch420/iSnow/releases/latest) page.
+2. Verify the download – both files in the same folder:
+   ```sh
+   shasum -a 256 -c iSnow-v1.0.dmg.sha256
+   ```
+   It should print `iSnow-v1.0.dmg: OK`. The SHA-256 of `iSnow-v1.0.dmg` is:
+   ```
+   130416b29b5d53a61c9bcc01a21ef5b09aefe5aad8fca8cbb4d5392237e1e966
+   ```
+3. Open the DMG and drag **iSnow** onto **Applications**.
+4. Open iSnow. Because it isn't signed with an Apple Developer ID certificate, macOS says it can't
+   verify the app. Go to **System Settings → Privacy & Security**, scroll down and click
+   **Open Anyway** next to the iSnow message, then confirm with **Open**. (Or run
+   `xattr -dr com.apple.quarantine /Applications/iSnow.app` in Terminal.) The app is fully open
+   source – you can read every line and build it yourself.
+5. A snowflake appears in the menu bar and it starts snowing. For snow on the Dock and desktop
+   icons, [allow Accessibility](#allowing-accessibility).
+
+### Build from source
+
+You need Xcode or the Xcode Command Line Tools (Swift 6) – no other dependencies.
+
+```sh
+git clone https://github.com/filiphajduch420/iSnow.git
+cd iSnow
+./build.sh --install          # builds and signs iSnow.app, copies it to ~/Applications and launches it
+```
+
+| Command | What it does |
+|---|---|
+| `./build.sh` | Builds `build/iSnow.app` (universal). Signs it with your *Apple Development* certificate if you have one, so Accessibility survives rebuilds; otherwise ad hoc. |
+| `./build.sh --install` | The same, then installs to `~/Applications` and launches it. |
+| `./scripts/release.sh 1.0` | Builds the release DMG and its SHA-256 checksum into `dist/`. |
+| `./scripts/screenshots.sh` | Renders the screenshots below into `media/` – no screen recording needed. |
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Christmas mode](media/christmas.png) | ![A moved window drops its drift](media/slide.png) |
+| **Christmas mode** – a tree, lights under the menu bar and Santa hats | **Move a window** – the drift breaks off and crumbles into clumps |
+| ![Hard frost](media/frost.png) | ![Settings – Snowfall](media/settings-snowfall.png) |
+| **Hard frost (−20 °C)** – long icicles and frosted windows | **Settings** – presets, temperature, flakes |
+| ![Settings – Drifts](media/settings-drifts.png) | ![Settings – Snowman](media/settings-snowman.png) |
+| **Drifts** – where snow settles, unlimited hills, ice | **Snowmen** – how many, how big, snowball fights |
 
 ## Features
 
@@ -54,24 +109,6 @@ Open **Settings…** (⌘,) from the snowflake in the menu bar:
 | Other | Cursor interaction, frosted edges, full-screen pause, 30 / 60 / 120 fps, launch at login, restore defaults |
 
 The app is in English and Czech and follows your system language.
-
-## Requirements
-
-- macOS 14 Sonoma or later
-- Apple silicon or Intel Mac (universal binary)
-
-## Install
-
-There are no prebuilt releases yet, so build it from source. You need Xcode or the Xcode Command
-Line Tools (Swift 6):
-
-```sh
-git clone https://github.com/filiphajduch420/iSnow.git
-cd iSnow
-./build.sh --install     # builds and signs iSnow.app, copies it to ~/Applications and launches it
-```
-
-`./build.sh` without arguments only builds `build/iSnow.app`.
 
 ## Permissions and privacy
 
@@ -133,6 +170,7 @@ about 1 MB.
 | `Renderer.swift` | Metal renderer with a triple-buffered ring of vertex buffers |
 | `Overlay.swift` | Click-through overlay window per screen, display link, the snowman's click panel |
 | `Snapshot.swift` | Debug mode that renders a fake scene to a PNG |
+| `Promo.swift` | Renders the README screenshots: a drawn desktop with the real simulation on top, and the settings window |
 
 Each drift is a height map with 4-point bins along the top edge of a surface. Flakes that cross the
 surface deposit snow into a bin, and a simple slope rule spreads it to the neighbours, so drifts

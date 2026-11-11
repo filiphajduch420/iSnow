@@ -244,6 +244,13 @@ struct Snowman {
         return Bool.random()
     }
 
+    /// Start over: build a fresh snowman right away (used for screenshots).
+    mutating func restart() {
+        reset(next: 0)
+        loose = []
+        carrot = nil
+    }
+
     mutating func buildNow() {
         if phase == .absent { nextBuild = 0 }
     }

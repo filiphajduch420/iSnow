@@ -73,6 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var axTick = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let i = CommandLine.arguments.firstIndex(of: "--promo"), i + 1 < CommandLine.arguments.count {
+            // Render the README screenshots (desktop scenes and the settings window), then quit.
+            Promo.run(dir: CommandLine.arguments[i + 1], delegate: self)
+            return
+        }
         if CommandLine.arguments.contains("--print-dock") {
             // Debug: show the Dock frame estimated without Accessibility.
             print("estimated Dock:", Tracker.estimatedDockFrame(includeMinimized: false).map { "\($0)" } ?? "none",
