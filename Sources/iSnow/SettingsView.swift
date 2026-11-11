@@ -129,6 +129,10 @@ private struct DriftTab: View {
                 Toggle("On the Dock", isOn: $settings.config.onDock)
                 Toggle("On desktop icons", isOn: $settings.config.onIcons)
                 Toggle("On desktop widgets", isOn: $settings.config.onWidgets)
+                if !settings.config.onWidgets {
+                    Text("Snow falls straight through desktop widgets.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 Toggle("On the menu bar", isOn: $settings.config.onMenuBar)
                 if !settings.axTrusted {
                     HStack {

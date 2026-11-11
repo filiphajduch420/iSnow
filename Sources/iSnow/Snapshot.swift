@@ -30,8 +30,12 @@ enum Snapshot {
         var t = 0.0
         let dt = 1.0 / 30
         let seconds = Double(ProcessInfo.processInfo.environment["ISNOW_SECONDS"] ?? "") ?? 75
+        // ISNOW_WIDGETS=1 adds a desktop widget that collects snow, =0 adds one that snow falls through.
+        let widgetEnv = ProcessInfo.processInfo.environment["ISNOW_WIDGETS"]
+        let widgets = widgetEnv == nil ? [] : [TrackedWindow(id: 9, frame: CGRect(x: 1060, y: 330, width: 120, height: 120))]
+        if let w = widgetEnv { cfg.onWidgets = w == "1" }
         while t < seconds {
-            sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, now: t, cfg: cfg)
+            sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, widgets: widgets, now: t, cfg: cfg)
             sim.step(dt: dt, now: t)
             t += dt
         }
@@ -75,6 +79,7 @@ enum Snapshot {
         ctx.setFillColor(CGColor(gray: 0.92, alpha: 0.9)); ctx.fill(CGRect(x: 0, y: 728, width: 1200, height: 32))
         ctx.setFillColor(CGColor(gray: 0.85, alpha: 0.6)); ctx.fill(dock)
         ctx.setFillColor(CGColor(red: 0.9, green: 0.7, blue: 0.3, alpha: 1)); for i in icons { ctx.fill(i) }
+        ctx.setFillColor(CGColor(red: 0.55, green: 0.75, blue: 0.95, alpha: 1)); for w in widgets { ctx.fill(w.frame) }
         // windows (back to front)
         for (k, wf) in wins.reversed().enumerated() {
             ctx.setFillColor(CGColor(gray: k == 0 ? 0.97 : 0.99, alpha: 1)); ctx.fill(wf.frame)

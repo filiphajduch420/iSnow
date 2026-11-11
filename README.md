@@ -150,7 +150,7 @@ This simulates a scene with fake windows, a Dock and icons and saves it as an im
 checking rendering without screen recording permission. `ISNOW_TEMP=3` sets the temperature,
 `ISNOW_SNOWMEN=2` the number of snowmen, `ISNOW_MAX=1` uses a single zoomed window and
 `ISNOW_DRAG=14` drags a window for 14 frames and captures the snow falling off, and
-`ISNOW_SECONDS=600` simulates ten minutes of snowfall first. `ISNOW_XMAS=0` (1, 2) turns on
+`ISNOW_SECONDS=600` simulates ten minutes of snowfall first. `ISNOW_WIDGETS=1` adds a desktop widget (`=0`: one that snow falls through). `ISNOW_XMAS=0` (1, 2) turns on
 Christmas mode with the given light style.
 
 ## Contributing
