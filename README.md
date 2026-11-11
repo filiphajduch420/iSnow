@@ -12,8 +12,12 @@ goes straight through the snow.
 - **Snowfall** with parallax depth, gusty wind and four presets: Flurry, Normal, Blizzard, Snowstorm.
 - **Drifts** pile up on the visible top edges of windows, on the Dock, on desktop icons and along the
   bottom of the screen. Hidden parts of a window stay snow-free.
-- **Move a window** and its snow slides off in the direction you dragged it, landing on whatever is
-  below. Close it and all of it falls.
+- **Move a window** and its drift breaks off as a slab that crumbles into clumps with a puff of
+  powder, carried a little in the direction you dragged it. The clumps land on whatever is below and
+  pile up again. A small nudge only shakes off the loose top layer. Close a window and all of it falls.
+- **Shovel:** a quick swipe of the cursor brushes snow off, and holding **⌥ Option** turns the
+  cursor into a shovel that pushes snow aside at any speed – on windows, the Dock and the bottom of
+  the screen. The menu also has *Shovel Snow at the Bottom*.
 - **Icicles** grow under windows that stay still for a while (and under the menu bar). Move the
   window and they snap off.
 - **Snowmen** on the Dock (one to six): each rolls in three balls, stacks them, puts on a scarf
@@ -27,7 +31,7 @@ goes straight through the snow.
   windows frost over from the corners – the colder, the more.
 - **Stays out of your way:** snow at the bottom and on the Dock hides behind windows, so a zoomed
   window is never covered, and a snowman that covers a window fades out and lets clicks through.
-- **Extras:** the cursor scatters flakes and a quick swipe brushes snow off a window, sparkling
+- **Extras:** the cursor scatters flakes, sparkling
   flakes, custom snow color, melting, frosted screen edges, and no snow over full-screen apps.
 
 ## Settings
@@ -80,7 +84,7 @@ Vločka is built to stay out of the way:
   snowman); shaders are compiled from source, so there are no textures or other assets;
 - `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode;
 - rendering stops completely when nothing is moving, and while the screen is asleep or locked;
-- window positions are polled 5× per second, Accessibility queries run off the main thread
+- window positions are polled 5× per second (30× while a window is being dragged), Accessibility queries run off the main thread
   once per second.
 
 On an M-series Mac a normal snowfall uses about 1 % CPU and about 20 MB of memory. The app bundle is
@@ -115,7 +119,8 @@ swift build -c release
 
 This simulates a scene with fake windows, a Dock and icons and saves it as an image – handy for
 checking rendering without screen recording permission. `VLOCKA_TEMP=3` sets the temperature,
-`VLOCKA_SNOWMEN=2` the number of snowmen and `VLOCKA_MAX=1` uses a single zoomed window.
+`VLOCKA_SNOWMEN=2` the number of snowmen, `VLOCKA_MAX=1` uses a single zoomed window and
+`VLOCKA_DRAG=14` drags a window for 14 frames and captures the snow falling off.
 
 ## Contributing
 

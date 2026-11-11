@@ -32,8 +32,19 @@ enum Snapshot {
             sim.step(dt: dt, now: t)
             t += dt
         }
-        sim.throwSnowball()
-        for _ in 0..<12 { sim.step(dt: dt, now: t); t += dt }
+        if let drag = ProcessInfo.processInfo.environment["VLOCKA_DRAG"], let frames = Int(drag) {
+            // Drag window 1 to the right and capture the snow mid-fall.
+            for f in 1...frames {
+                let w0 = wins[0].frame
+                wins[0] = TrackedWindow(id: wins[0].id, frame: w0.offsetBy(dx: f <= 8 ? 22 : 0, dy: f <= 8 ? 6 : 0))
+                sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, now: t, cfg: cfg)
+                sim.step(dt: dt, now: t)
+                t += dt
+            }
+        } else {
+            sim.throwSnowball()
+            for _ in 0..<12 { sim.step(dt: dt, now: t); t += dt }
+        }
 
         var particles: [Particle] = []
         var mesh: [Vertex] = []

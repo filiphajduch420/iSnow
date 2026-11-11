@@ -206,6 +206,8 @@ private struct ExtrasTab: View {
         Form {
             Section("Extras") {
                 Toggle("The cursor scatters flakes and a quick swipe brushes snow off", isOn: $settings.config.mouse)
+                Text("Hold ⌥ Option and move the cursor over snow to shovel it – even at the bottom of the screen and on the Dock.")
+                    .font(.callout).foregroundStyle(.secondary)
                 Toggle("Frosted screen edges", isOn: $settings.config.frost)
                 Toggle("Don't snow over full-screen apps", isOn: $settings.config.pauseFullscreen)
             }

@@ -49,6 +49,7 @@ final class Pile {
     var frost: Float = 0             // 0…1, frost creeping in from the window corners
     var occluders: [CGRect] = []     // windows in front of this one (for frost corners)
     var frostSeed: UInt64 = 0
+    var lastSeen: Double = 0         // time of the last sync (for window speed)
 
     init(key: Int, kind: SurfaceKind, rect: CGRect, binW: Float, now: Double) {
         self.key = key
@@ -104,6 +105,9 @@ final class Simulation {
     private var cfg = SimConfig()
     private var fullscreen = false
     private var lastMouse: SIMD2<Float>?
+    private var shovelAt: SIMD2<Float>?        // cursor position while the ⌥ shovel is active
+    /// True when a window moved during the last sync (the app then polls faster).
+    private(set) var windowMoving = false
     private var tint: (Float, Float, Float) = (1, 1, 1)
 
     init(screenFrame: CGRect, visibleFrame: CGRect, hostsSnowman: Bool) {
@@ -137,6 +141,7 @@ final class Simulation {
             return r.minX <= 1 && r.minY <= 1 && r.maxX >= size.width - 1 && r.maxY >= size.height - 1
         }
         if fullscreen != wasFull { changed = true }
+        windowMoving = false
         var seen = Set<Int>()
         var order: [Pile] = []
         let localOcc = occluders.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) }
@@ -144,20 +149,32 @@ final class Simulation {
         func upsert(key: Int, kind: SurfaceKind, rect r: CGRect) -> Pile {
             seen.insert(key)
             if let p = piles[key] {
-                if abs(p.rect.minX - r.minX) > 0.5 || abs(p.rect.minY - r.minY) > 0.5
-                    || abs(p.rect.width - r.width) > 0.5 || abs(p.rect.height - r.height) > 0.5 {
-                    let push = Float(r.midX - p.rect.midX) * 4
-                    shake(p, push: max(-260, min(260, push)))
-                    let resized = abs(p.rect.width - r.width) > 0.5
-                    p.rect = r
-                    if resized { p.resize(binW: Self.binW) }
+                let dx = Float(r.minX - p.rect.minX), dy = Float(r.minY - p.rect.minY)
+                let resized = abs(p.rect.width - r.width) > 0.5 || abs(p.rect.height - r.height) > 0.5
+                if abs(dx) > 0.5 || abs(dy) > 0.5 || resized {
+                    let dt = Float(max(1.0 / 60, min(0.5, now - p.lastSeen)))
+                    let vel = SIMD2(dx / dt, dy / dt)
+                    let dist = (dx * dx + dy * dy).squareRoot()
+                    if !resized && dist < 4 && p.kind == .window {
+                        // A nudge: the drift rides along, only the loose top layer shakes off.
+                        p.rect = r
+                        shed(p, vel: vel, fraction: min(0.35, dist / 12))
+                    } else {
+                        // Pulled away: the whole drift slides off where the window was.
+                        dump(p, vel: vel)
+                        p.rect = r
+                        if resized { p.resize(binW: Self.binW) }
+                    }
                     p.lastMove = now
+                    windowMoving = true
                     changed = true
                 }
+                p.lastSeen = now
                 return p
             }
             let p = Pile(key: key, kind: kind, rect: r, binW: Self.binW, now: now)
             p.cap = capFor(kind)
+            p.lastSeen = now
             piles[key] = p
             changed = true
             return p
@@ -285,7 +302,7 @@ final class Simulation {
 
     // MARK: - Simulation step
 
-    func step(dt: Double, now: Double, mouse: CGPoint? = nil) {
+    func step(dt: Double, now: Double, mouse: CGPoint? = nil, shovel: Bool = false) {
         time += dt
         let fdt = Float(dt)
         wind = Float(cfg.wind) * Float(sin(time * 0.071) * 16 + sin(time * 0.23) * 6 + sin(time * 0.017) * 12)
@@ -298,7 +315,12 @@ final class Simulation {
                 if flakes.count < maxF { spawnFlake() }
             }
         }
-        if cfg.mouse, let mouse { stepMouse(SIMD2(Float(mouse.x), Float(mouse.y)), dt: fdt) } else { lastMouse = nil }
+        shovelAt = nil
+        if cfg.mouse, let mouse {
+            let m = SIMD2(Float(mouse.x), Float(mouse.y))
+            if shovel { stepShovel(m, dt: fdt) }
+            stepMouse(m, dt: fdt)
+        } else { lastMouse = nil }
         let acc = Float(cfg.accumulation)
         let temp = Float(cfg.temperature)
         let sleet = temp > 4          // too warm: wet flakes melt on contact
@@ -517,28 +539,83 @@ final class Simulation {
     }
 
     /// A window moved or disappeared – the snow slides off and icicles snap.
-    private func shake(_ p: Pile, push: Float) {
+    private func shake(_ p: Pile, push: Float) { dump(p, vel: SIMD2(push, 0)) }
+
+    /// The whole drift falls: it leaves as one slab (shared velocity) and breaks into clumps,
+    /// with a puff of powder. Clumps land on whatever is below and pile up again.
+    private func dump(_ p: Pile, vel: SIMD2<Float>) {
         let n = p.bins.count
-        var spawned = 0
-        for i in stride(from: 0, to: n, by: 2) where p.bins[i] > 0.6 && p.visible[i] && spawned < 120 {
+        let x0 = Float(p.rect.minX), top = Float(p.rect.maxY)
+        // The slab keeps part of the window's motion (friction) – capped so it stays readable.
+        let carry = SIMD2(max(-420, min(420, vel.x * 0.45)), max(-200, min(260, vel.y * 0.3)))
+        var budget = 900
+        for i in 0..<n where p.bins[i] > 0.3 && p.visible[i] && budget > 0 {
             let h = p.bins[i]
-            let x = Float(p.rect.minX) + (Float(i) + 0.5) * Self.binW
-            debris.append(Debris(x: x, y: Float(p.rect.maxY) + h * 0.5,
-                                 vx: push * Float.random(in: 0.3...1) + Float.random(in: -25...25),
-                                 vy: Float.random(in: 0...60), size: min(9, 2.5 + h * 0.45) * Float.random(in: 0.7...1.25),
-                                 alpha: 1, lands: true))
-            spawned += 1
+            let x = x0 + (Float(i) + 0.5) * Self.binW
+            let layers = max(1, min(4, Int(h / 6) + 1))
+            for k in 0..<layers {
+                let size = max(2.6, min(13, h / Float(layers) * 0.9 + 2.4)) * Float.random(in: 0.8...1.2)
+                debris.append(Debris(x: x + Float.random(in: -1.5...1.5), y: top + (Float(k) + 0.5) * h / Float(layers),
+                                     vx: carry.x * Float.random(in: 0.75...1) + Float.random(in: -14...14),
+                                     vy: carry.y + Float.random(in: -6...36), size: size, alpha: 1, lands: true))
+                budget -= 1
+            }
+            if i % 3 == 0 {
+                // powder puff
+                debris.append(Debris(x: x, y: top + h, vx: carry.x * 0.5 + Float.random(in: -70...70),
+                                     vy: Float.random(in: 30...120), size: Float.random(in: 1.4...3), alpha: 0.85, lands: false))
+            }
         }
         for (k, ic) in p.icicles.enumerated() where ic.len > 2 && (k < p.icicleVisible.count && p.icicleVisible[k]) {
-            shards.append(Shard(x: Float(p.rect.minX) + ic.x, y: Float(p.rect.minY), vy: 0, len: ic.len, width: ic.width))
+            shards.append(Shard(x: x0 + ic.x, y: Float(p.rect.minY), vy: min(0, vel.y * 0.3), len: ic.len, width: ic.width))
         }
-        if debris.count > 2500 { debris.removeFirst(debris.count - 2500) }
+        if debris.count > 5000 { debris.removeFirst(debris.count - 5000) }
         for i in 0..<n { p.bins[i] = 0 }
         p.icicles = []
         p.icicleVisible = []
         p.frost = 0
         p.dirty = true
         p.iceDirty = true
+    }
+
+    /// A small nudge: part of the top layer shakes off, the rest rides along with the window.
+    private func shed(_ p: Pile, vel: SIMD2<Float>, fraction: Float) {
+        let x0 = Float(p.rect.minX), top = Float(p.rect.maxY)
+        for i in p.bins.indices where p.bins[i] > 0.6 && p.visible[i] {
+            // Edges lose more than the middle.
+            let edge: Float = min(Float(i), Float(p.bins.count - 1 - i)) < 6 ? 2.2 : 1
+            let take = p.bins[i] * min(0.9, fraction * edge)
+            guard take > 0.3 else { continue }
+            p.bins[i] -= take
+            if i % 2 == 0 {
+                debris.append(Debris(x: x0 + (Float(i) + 0.5) * Self.binW, y: top + p.bins[i] + take * 0.5,
+                                     vx: -vel.x * 0.15 + Float.random(in: -25...25), vy: Float.random(in: 10...60),
+                                     size: min(8, 2.2 + take * 0.8), alpha: 1, lands: true))
+            }
+        }
+        if vel.x * vel.x + vel.y * vel.y > 150 * 150 {
+            for (k, ic) in p.icicles.enumerated() where ic.len > 2 && (k < p.icicleVisible.count && p.icicleVisible[k]) {
+                shards.append(Shard(x: x0 + ic.x, y: Float(p.rect.minY), vy: 0, len: ic.len, width: ic.width))
+            }
+            p.icicles = []
+            p.icicleVisible = []
+            p.iceDirty = true
+        }
+        p.dirty = true
+    }
+
+    /// Shovel the snow off the bottom edge and the Dock (menu action).
+    func shovelBottom() {
+        for p in landables where p.kind == .ground || p.kind == .dock {
+            let x0 = Float(p.rect.minX), top = Float(p.rect.maxY)
+            for i in p.bins.indices where p.bins[i] > 0.4 && p.visible[i] && i % 2 == 0 {
+                debris.append(Debris(x: x0 + (Float(i) + 0.5) * Self.binW, y: top + p.bins[i] * 0.6,
+                                     vx: Float.random(in: -90...90), vy: Float.random(in: 120...320),
+                                     size: min(7, 2 + p.bins[i] * 0.3), alpha: 1, lands: false))
+            }
+            for i in p.bins.indices { p.bins[i] = 0 }
+            p.dirty = true
+        }
     }
 
     func shakeAll() {
@@ -596,7 +673,7 @@ final class Simulation {
             }
         }
         guard speed > 260 else { return }
-        for p in landables where p.kind != .ground {
+        for p in landables {
             let rel = m.x - Float(p.rect.minX)
             guard rel >= 0, rel < Float(p.rect.width) else { continue }
             let c = Int(rel / Self.binW)
@@ -611,6 +688,47 @@ final class Simulation {
                                      size: min(10, 2.5 + take * 0.5), alpha: 1, lands: true))
             }
             p.dirty = true
+        }
+    }
+
+    /// ⌥ + cursor = shovel: pushes snow in the direction of motion (a ridge builds up ahead),
+    /// works at any speed, also on the bottom drift and the Dock.
+    private func stepShovel(_ m: SIMD2<Float>, dt: Float) {
+        let dirX: Float = {
+            guard let last = lastMouse else { return 0 }
+            let d = m.x - last.x
+            return abs(d) < 0.3 ? 0 : (d > 0 ? 1 : -1)
+        }()
+        let reach = 4                     // bins on each side (≈ 16 pt)
+        for p in landables {
+            let rel = m.x - Float(p.rect.minX)
+            guard rel >= -16, rel < Float(p.rect.width) + 16 else { continue }
+            let top = Float(p.rect.maxY)
+            guard m.y >= top - 6, m.y <= top + p.cap + 10 else { continue }
+            shovelAt = m
+            let c = Int(rel / Self.binW), n = p.bins.count
+            var moved: Float = 0
+            for k in max(0, c - reach)...min(n - 1, max(0, c + reach)) where p.bins[k] > 0.05 {
+                let take = p.bins[k] * min(1, 14 * dt)
+                p.bins[k] -= take
+                moved += take
+            }
+            guard moved > 0.01 else { continue }
+            p.dirty = true
+            if dirX != 0 {
+                // Plough: the snow piles up just ahead of the shovel; off the end it falls.
+                let ahead = c + Int(dirX) * (reach + 2)
+                if ahead >= 0 && ahead < n && p.visible[ahead] {
+                    let before = p.bins[ahead]
+                    deposit(p, ahead, moved * 0.85)
+                    moved -= max(0, p.bins[ahead] - before)
+                }
+            }
+            if moved > 0.2 && Float.random(in: 0...1) < 0.6 {
+                debris.append(Debris(x: m.x + dirX * 10, y: top + 4, vx: dirX * Float.random(in: 40...140) + Float.random(in: -30...30),
+                                     vy: Float.random(in: 40...150), size: min(6, 1.8 + moved * 0.4), alpha: 0.95,
+                                     lands: dirX != 0))
+            }
         }
     }
 
@@ -805,8 +923,11 @@ final class Simulation {
                 out.append(Particle(x: f.x, y: f.y, size: f.size, alpha: f.alpha))
             }
         }
-        for d in debris { out.append(Particle(x: d.x, y: d.y, size: d.size, alpha: max(0, d.alpha))) }
-        for s in snowballs { out.append(Particle(x: s.x, y: s.y, size: 7.5, alpha: 1)) }
+        for d in debris {
+            // Landing clumps are drawn solid; powder stays soft.
+            out.append(Particle(x: d.x, y: d.y, size: d.lands && d.size > 2.4 ? -d.size : d.size, alpha: max(0, d.alpha)))
+        }
+        for s in snowballs { out.append(Particle(x: s.x, y: s.y, size: -7.5, alpha: 1)) }
     }
 
     func buildMesh(into out: inout [Vertex]) {
@@ -820,6 +941,9 @@ final class Simulation {
         if cfg.onMenuBar { buildMenuBar(into: &out) }
         for s in shards { Mesh.icicle(&out, x: s.x, top: s.y, len: s.len, width: s.width, alpha: 0.9) }
         if hostsSnowman { for s in snowmen { s.build(into: &out) } }
+        if let m = shovelAt {
+            Mesh.ring(&out, cx: m.x, cy: m.y, r: 17, width: 1.5, color: (0.75, 0.86, 1, 0.75))
+        }
     }
 
     private func rebuildMesh(_ p: Pile) {

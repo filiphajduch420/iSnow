@@ -14,18 +14,29 @@ final class Renderer {
     #include <metal_stdlib>
     using namespace metal;
     struct U { float2 size; float2 pad; float4 tint; };
-    struct P { float4 pos [[position]]; float2 uv; float alpha; };
+    struct P { float4 pos [[position]]; float2 uv; float alpha; float hard; };
     vertex P particle_vs(uint vid [[vertex_id]], uint iid [[instance_id]],
                          const device float4* inst [[buffer(0)]], constant U& u [[buffer(1)]]) {
         float4 d = inst[iid];
+        float s = abs(d.z);                       // negative size = solid snow clump
         float2 c = float2((vid & 1) ? 1.0 : -1.0, (vid & 2) ? 1.0 : -1.0);
-        float2 p = d.xy + c * d.z * 0.5;
-        P o; o.pos = float4(p / u.size * 2.0 - 1.0, 0.0, 1.0); o.uv = c; o.alpha = d.w; return o;
+        float2 p = d.xy + c * s * 0.5;
+        P o; o.pos = float4(p / u.size * 2.0 - 1.0, 0.0, 1.0); o.uv = c; o.alpha = d.w;
+        o.hard = d.z < 0.0 ? 1.0 : 0.0; return o;
     }
     fragment float4 particle_fs(P in [[stage_in]], constant U& u [[buffer(0)]]) {
         float r = length(in.uv);
-        float a = smoothstep(1.0, 0.25, r) * in.alpha;
-        float3 col = mix(float3(1.0), float3(0.80, 0.85, 0.93), r * r * 0.7);
+        float a;
+        float3 col;
+        if (in.hard > 0.5) {
+            // Clump: crisp edge, lit from the top left, bluish shade bottom right – visible on white.
+            a = smoothstep(1.0, 0.82, r) * in.alpha;
+            float light = clamp(0.5 + 0.5 * dot(normalize(float2(-0.6, 0.8)), in.uv) - r * 0.25, 0.0, 1.0);
+            col = mix(float3(0.76, 0.83, 0.94), float3(1.0), light);
+        } else {
+            a = smoothstep(1.0, 0.25, r) * in.alpha;
+            col = mix(float3(1.0), float3(0.80, 0.85, 0.93), r * r * 0.7);
+        }
         col *= u.tint.rgb;
         return float4(col * a, a);
     }

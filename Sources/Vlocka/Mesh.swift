@@ -79,6 +79,18 @@ enum Mesh {
         }
     }
 
+    /// Thin ring (shovel indicator).
+    static func ring(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, width: Float, color: RGBA, segments: Int = 28) {
+        let r0 = r - width / 2, r1 = r + width / 2
+        for s in 0..<segments {
+            let a0 = Float(s) / Float(segments) * 2 * .pi, a1 = Float(s + 1) / Float(segments) * 2 * .pi
+            let p0 = (cx + cos(a0) * r0, cy + sin(a0) * r0), p1 = (cx + cos(a0) * r1, cy + sin(a0) * r1)
+            let p2 = (cx + cos(a1) * r1, cy + sin(a1) * r1), p3 = (cx + cos(a1) * r0, cy + sin(a1) * r0)
+            v(&out, p0.0, p0.1, color); v(&out, p1.0, p1.1, color); v(&out, p2.0, p2.1, color)
+            v(&out, p0.0, p0.1, color); v(&out, p2.0, p2.1, color); v(&out, p3.0, p3.1, color)
+        }
+    }
+
     static func disc(_ out: inout [Vertex], cx: Float, cy: Float, r: Float, color: RGBA) {
         circle(&out, cx: cx, cy: cy, r: r, center: color, rim: color, segments: 12)
     }

@@ -47,6 +47,7 @@ struct MenuContent: View {
         }
         Divider()
         Button("Shake Off All Snow") { delegate.shakeAll() }
+        Button("Shovel Snow at the Bottom") { delegate.shovelBottom() }
         SettingsLink { Text("Settings…") }
             .keyboardShortcut(",")
         Divider()
@@ -83,9 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.refreshWindows()
         rebuildOverlays()
 
-        let poll = Timer(timeInterval: 0.2, repeats: true) { _ in MainActor.assumeIsolated { self.poll() } }
-        RunLoop.main.add(poll, forMode: .common)
-        pollTimer = poll
+        setPollInterval(Self.idlePoll)
         let ax = Timer(timeInterval: 1.0, repeats: true) { _ in MainActor.assumeIsolated { self.refreshAX() } }
         RunLoop.main.add(ax, forMode: .common)
         axTimer = ax
@@ -115,6 +114,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var suspended = false
+    private static let idlePoll = 0.2           // 5× per second while windows sit still
+    private static let fastPoll = 1.0 / 30      // while a window is being dragged
+    private var pollInterval = 0.0
+    private var lastMotion = 0.0
+
+    private func setPollInterval(_ t: Double) {
+        guard t != pollInterval else { return }
+        pollInterval = t
+        pollTimer?.invalidate()
+        let timer = Timer(timeInterval: t, repeats: true) { _ in MainActor.assumeIsolated { self.poll() } }
+        timer.tolerance = t * 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
+    }
 
     private func suspend(_ on: Bool) {
         suspended = on
@@ -160,6 +173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         updatePanel()
+        // Follow a dragged window closely so the snow visibly slides off, then calm down again.
+        if overlays.contains(where: { $0.sim.windowMoving }) { lastMotion = now }
+        setPollInterval(now - lastMotion < 1.0 ? Self.fastPoll : Self.idlePoll)
     }
 
     private func refreshAX() {
@@ -212,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildSnowmanNow() {
         for o in overlays where o.sim.hostsSnowman { o.sim.buildSnowmanNow(); o.wake() }
+    }
+
+    func shovelBottom() {
+        for o in overlays { o.sim.shovelBottom(); o.wake() }
     }
 
     func shakeAll() {
