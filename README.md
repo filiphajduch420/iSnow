@@ -31,8 +31,10 @@ goes straight through the snow.
 - **Temperature** from −25 °C to +10 °C. Above zero the snow gets wet and drifts, icicles and
   snowmen melt; above +4 °C it turns to sleet. Below zero nothing melts, icicles grow faster, longer
   (up to about 3× in hard frost) and thicker, and windows frost over from the corners – the colder, the more.
-- **Stays out of your way:** snow at the bottom and on the Dock hides behind windows, so a zoomed
-  window is never covered, and a snowman that covers a window fades out and lets clicks through.
+- **Stays out of your way:** snow at the bottom never covers the Dock's icons and hides behind
+  windows, snow on the Dock shrinks to a thin ledge under a window, icicles never hang into the Dock,
+  and a snowman that covers a window fades out and lets clicks through. Without Accessibility
+  permission the Dock's position is estimated from its preferences.
 - **Christmas mode:** a decorated tree with twinkling lights, a glowing star and presents next to
   the Dock, a string of lights under the menu bar (colorful, warm white or chasing) and Santa hats
   for the snowmen.

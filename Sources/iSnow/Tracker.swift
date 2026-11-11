@@ -13,6 +13,7 @@ final class Tracker {
     private(set) var windows: [TrackedWindow] = []      // front to back
     private(set) var overlayOccluders: [CGRect] = []     // menus, popovers, notifications…
     private(set) var dockFrame: CGRect?
+    private(set) var dockEstimated = false        // frame guessed from the Dock's preferences (no AX)
     private(set) var icons: [CGRect] = []
     private(set) var widgets: [TrackedWindow] = []     // desktop widgets (WidgetKit, macOS 14+)
     private var axBusy = false
@@ -62,7 +63,11 @@ final class Tracker {
     func refreshAX(wantDock: Bool, wantIcons: Bool, done: @escaping @MainActor () -> Void) {
         Settings.shared.axTrusted = AXIsProcessTrusted()
         guard Settings.shared.axTrusted, !axBusy else {
-            if !Settings.shared.axTrusted { dockFrame = nil; icons = [] }
+            if !Settings.shared.axTrusted {
+                dockFrame = Self.estimatedDockFrame()
+                dockEstimated = dockFrame != nil
+                icons = []
+            }
             return
         }
         axBusy = true
@@ -71,12 +76,41 @@ final class Tracker {
             let dock = wantDock ? AXProbe.dockFrame(primaryHeight: h) : nil
             let icons = wantIcons ? AXProbe.desktopIcons(primaryHeight: h) : nil
             await MainActor.run {
-                self.dockFrame = dock
+                self.dockFrame = dock ?? Self.estimatedDockFrame()
+                self.dockEstimated = dock == nil && self.dockFrame != nil
                 if let icons { self.icons = icons }
                 self.axBusy = false
                 done()
             }
         }
+    }
+
+    /// Without Accessibility the Dock's frame is estimated: it is centred at the bottom of the screen,
+    /// as tall as the visible frame's bottom inset, and about one tile per item wide.
+    static func estimatedDockFrame() -> CGRect? {
+        let d = UserDefaults(suiteName: "com.apple.dock")
+        guard (d?.string(forKey: "orientation") ?? "bottom") == "bottom",
+              let screen = NSScreen.screens.first(where: { $0.visibleFrame.minY - $0.frame.minY > 20 }) else { return nil }
+        let height = screen.visibleFrame.minY - screen.frame.minY
+        var tile = CGFloat(d?.double(forKey: "tilesize") ?? 0)
+        if tile < 16 { tile = height - 20 }
+        var pinned = Set<String>()
+        for e in d?.array(forKey: "persistent-apps") ?? [] {
+            if let td = (e as? [String: Any])?["tile-data"] as? [String: Any], let b = td["bundle-identifier"] as? String {
+                pinned.insert(b)
+            }
+        }
+        let running = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy == .regular && $0.bundleIdentifier != "com.apple.finder"
+                && !pinned.contains($0.bundleIdentifier ?? "")
+        }.count
+        let showRecents = d?.object(forKey: "show-recents") as? Bool ?? true
+        let recents = showRecents ? (d?.array(forKey: "recent-apps")?.count ?? 0) : 0
+        let others = d?.array(forKey: "persistent-others")?.count ?? 0
+        let items = 1 + pinned.count + running + recents + others + 1          // Finder … Trash
+        let separators: CGFloat = recents > 0 ? 2 : 1
+        let width = CGFloat(items) * (tile + 2) + separators * tile * 0.35 + 16
+        return CGRect(x: screen.frame.midX - width / 2, y: screen.frame.minY + 2, width: width, height: height - 2)
     }
 
     static func requestAccessibility() {

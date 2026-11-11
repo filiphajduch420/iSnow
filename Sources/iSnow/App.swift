@@ -40,6 +40,8 @@ struct MenuContent: View {
         }
         Divider()
         Toggle("Snow on Windows", isOn: $settings.config.onWindows)
+        Toggle("Snow on Widgets", isOn: $settings.config.onWidgets)
+        Toggle("Snow on the Dock", isOn: $settings.config.onDock)
         Toggle("Snowman", isOn: $settings.config.snowman)
         Toggle("Christmas Mode", isOn: $settings.config.christmas)
         Toggle("Cursor Scatters Snow", isOn: $settings.config.mouse)
@@ -175,7 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for o in overlays {
             o.fps = cfg.fps
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
-                          icons: tracker.icons, widgets: tracker.widgets, now: now, cfg: cfg) || o.sim.isAnimating {
+                          icons: tracker.icons, widgets: tracker.widgets, dockEstimated: tracker.dockEstimated,
+                          now: now, cfg: cfg) || o.sim.isAnimating {
                 o.wake()
             }
         }

@@ -50,6 +50,7 @@ final class Pile {
     var frost: Float = 0             // 0…1, frost creeping in from the window corners
     var occluders: [CGRect] = []     // windows in front of this one (for frost corners)
     var frostSeed: UInt64 = 0
+    var limit: [Float] = []          // per-bin drawing limit (the Dock's snow stays a thin ledge under windows)
     var lastSeen: Double = 0         // time of the last sync (for window speed)
 
     init(key: Int, kind: SurfaceKind, rect: CGRect, binW: Float, now: Double) {
@@ -99,6 +100,7 @@ final class Simulation {
     private var windowRects: [(key: Int, rect: CGRect)] = []   // front to back
     private var dockLocal: CGRect?
     private var treePos: (x: Float, y: Float)?
+    private var noIcicles: CGRect?          // the Dock (plus a margin): icicles never hang into it
     private var treeGhost = false
 
     private var time: Double = 0
@@ -131,7 +133,7 @@ final class Simulation {
     /// Returns true when something changed and a redraw is needed.
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
-              widgets: [TrackedWindow] = [], now: Double, cfg: SimConfig) -> Bool {
+              widgets: [TrackedWindow] = [], dockEstimated: Bool = false, now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
             || cfg.unlimitedDrifts != self.cfg.unlimitedDrifts
@@ -184,6 +186,7 @@ final class Simulation {
             return p
         }
 
+        noIcicles = dock.map { $0.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -6, dy: -10) }
         // Windows (front to back); a window is occluded by the windows in front of it.
         var front: [CGRect] = localOcc
         var rects: [(key: Int, rect: CGRect)] = []
@@ -206,8 +209,11 @@ final class Simulation {
         if let d = dock?.offsetBy(dx: -origin.x, dy: -origin.y), d.intersects(bounds), d.maxY > 6 {
             dockLocal = d
             if cfg.onDock {
+                // Snow lies right on the Dock's top edge. Where a window sits above the Dock it stays a
+                // thin ledge, so it never covers the window (or the icons below).
                 let p = upsert(key: Self.dockKey, kind: .dock, rect: d)
-                if updateVisibility(p, occluders: front) { changed = true }
+                if updateVisibility(p, occluders: localOcc) { changed = true }
+                if updateDockLimit(p, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
                 order.append(p)
             }
         }
@@ -234,7 +240,7 @@ final class Simulation {
         }
         // Bottom edge of the screen
         let g = upsert(key: Self.groundKey, kind: .ground, rect: CGRect(x: 0, y: -1, width: size.width, height: 1))
-        if updateGroundVisibility(g, dock: dockLocal, windows: front) { changed = true }
+        if updateGroundVisibility(g, dock: dockLocal, margin: dockEstimated ? 24 : 4, windows: front) { changed = true }
         order.append(g)
 
         for (k, p) in piles where !seen.contains(k) {
@@ -269,7 +275,8 @@ final class Simulation {
         let roof = max(0, H - Float(menuBarHeight) - Float(p.rect.maxY) - 2)   // room up to the menu bar
         if cfg.unlimitedDrifts {
             switch p.kind {
-            case .window, .dock, .widget: return roof
+            case .window, .widget: return roof
+            case .dock: return min(roof, 70)
             case .ground: return max(0, roof - 30)
             case .icon: return min(Float(cfg.windowDepth) * 0.4, 22)
             }
@@ -291,7 +298,9 @@ final class Simulation {
         guard b >= 0, b < p.bins.count else { return 0 }
         // Average a few bins so a snowman doesn't jitter on a bumpy drift.
         var sum: Float = 0, n: Float = 0
-        for k in max(0, b - 2)...min(p.bins.count - 1, b + 2) { sum += p.bins[k]; n += 1 }
+        for k in max(0, b - 2)...min(p.bins.count - 1, b + 2) {
+            sum += min(p.bins[k], k < p.limit.count ? p.limit[k] : .infinity); n += 1
+        }
         return sum / n
     }
 
@@ -325,6 +334,7 @@ final class Simulation {
             for (k, ic) in p.icicles.enumerated() {
                 let x = p.rect.minX + CGFloat(ic.x)
                 var v = bottom > 40 && x >= 0 && x <= size.width
+                if let d = noIcicles, x >= d.minX, x <= d.maxX, bottom <= d.maxY + 30 { v = false }
                 if v {
                     for o in occluders where x >= o.minX && x <= o.maxX
                         && ((bottom - 3 >= o.minY && bottom - 3 <= o.maxY) || (bottom + 3 >= o.minY && bottom + 3 <= o.maxY)) {
@@ -340,12 +350,27 @@ final class Simulation {
     }
 
     /// The bottom drift lies behind windows: a window reaching the bottom edge hides it.
-    private func updateGroundVisibility(_ p: Pile, dock: CGRect?, windows: [CGRect]) -> Bool {
+    private func updateDockLimit(_ p: Pile, windows: [CGRect]) -> Bool {
+        if p.limit.count != p.bins.count { p.limit = Array(repeating: .infinity, count: p.bins.count) }
+        let top = p.rect.maxY
+        var changed = false
+        for i in p.bins.indices {
+            let x = p.rect.minX + (CGFloat(i) + 0.5) * CGFloat(Self.binW)
+            let covered = windows.contains { x >= $0.minX && x <= $0.maxX && top + 4 >= $0.minY && top + 4 <= $0.maxY }
+            let l: Float = covered ? 4 : .infinity
+            if p.limit[i] != l { p.limit[i] = l; changed = true }
+        }
+        if changed { p.dirty = true }
+        return changed
+    }
+
+    private func updateGroundVisibility(_ p: Pile, dock: CGRect?, margin: CGFloat, windows: [CGRect]) -> Bool {
         var changed = false
         for i in 0..<p.bins.count {
             let x = (CGFloat(i) + 0.5) * CGFloat(Self.binW)
             var v = true
-            if let d = dock, d.minY < 12, x >= d.minX - 4, x <= d.maxX + 4 { v = false }
+            // Never in front of the Dock's icons.
+            if let d = dock, d.minY < 12, x >= d.minX - margin, x <= d.maxX + margin { v = false }
             if v { for w in windows where x >= w.minX && x <= w.maxX && w.minY <= 4 { v = false; break } }
             if p.visible[i] != v { p.visible[i] = v; changed = true }
         }
@@ -1075,7 +1100,11 @@ final class Simulation {
         let base = Float(p.rect.maxY) - 0.5
         let x0 = Float(p.rect.minX)
         let bw = Self.binW
-        func h(_ i: Int) -> Float { p.bins[max(0, min(n - 1, i))] }
+        let lim = p.limit.count == n ? p.limit : []
+        func h(_ i: Int) -> Float {
+            let k = max(0, min(n - 1, i))
+            return lim.isEmpty ? p.bins[k] : min(p.bins[k], lim[k])
+        }
         var i = 0
         while i < n {
             if !p.visible[i] || p.bins[i] < 0.25 { i += 1; continue }
