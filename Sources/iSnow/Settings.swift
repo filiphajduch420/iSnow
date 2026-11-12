@@ -82,6 +82,34 @@ struct SimConfig: Codable, Equatable, Sendable {
     var hideFromCapture = false        // keep the snow out of screenshots and screen sharing
     var fps: Int = 60
     var calmLowerRate = false          // draw calm snowfall at 30 fps (saves power)
+    // 1.3 – each feature area adds its settings below its own marker (keep the markers)
+    // [1.3 updates]
+    var checkUpdates = true            // look for a newer release on GitHub once a day
+    // [1.3 holidays]
+    var christmasMode = 2              // Holidays.ChristmasMode: 0 off, 1 on, 2 automatic (1 Dec – 6 Jan)
+    var windowLights = true            // Christmas lights along the top of the frontmost window
+    var countdownSign = true           // wooden sign by the tree: days to Christmas, countdown to midnight
+    var newYear = true                 // New Year's Eve: countdown, rockets, fireworks at midnight, party hats
+    // [1.3 snowmen]
+    var snowmanOutfits = true          // random hats and scarf colours (off = the classic look)
+    // [1.3 penguin]
+    var penguin = true                 // a penguin waddles along the bottom now and then (at or below +2 °C)
+    var penguinInterval: Double = 4    // minutes between penguin visits
+    // [1.3 weather]
+    var livingWeather = true           // snowfall, wind and temperature wander around the sliders (Weather.swift)
+    var weatherStrength: Double = 1.0  // how far the living weather strays from the sliders
+    var weatherWind: Double = 0        // runtime only: steady wind + gusts in pt/s (+ blows to the right)
+    var weatherPowder: Double = 0      // runtime only: 0…1 powder blown off drift crests
+    // [1.3 welcome]
+    // [1.3 tree]
+    // [1.3 lights]
+    // [1.3 decor]
+    var christmasDecor = true          // gingerbread house, candy canes, saplings, window wreath, gifts in snowmen's hands
+    var goldenFlakes = true            // a few golden star flakes among the snow in Christmas mode
+    var decorSize: Double = 1.3        // scale of the gingerbread house, candy canes and saplings
+    // [1.3 reindeer]
+    var reindeer = true                // a reindeer trots along the bottom now and then in Christmas mode
+    var reindeerInterval: Double = 6   // minutes between reindeer visits
     // Runtime only (not persisted)
     var paused = false
 
@@ -91,6 +119,24 @@ struct SimConfig: Codable, Equatable, Sendable {
              snowmanSize, snowmanCount, snowmanGhost,
              snowmanBreak, snowballs, throwEvery, christmas, christmasTree, christmasGarland, christmasHats, lightStyle,
              treeSize, lightSize, lightGlow, santa, skier, skierEvery, skierInterval, skierCount, snowplow, autoPlow, autoPlowEvery, autoPlowHeight, lightsWhilePaused, calmActive, fahrenheit, batterySaver, retina, hideFromCapture, mouse, frost, pauseFullscreen, fullscreenSnow, fps, calmLowerRate
+        // [1.3 keys updates]
+        case checkUpdates
+        // [1.3 keys holidays]
+        case christmasMode, windowLights, countdownSign, newYear
+        // [1.3 keys snowmen]
+        case snowmanOutfits
+        // [1.3 keys penguin]
+        case penguin, penguinInterval
+        // [1.3 keys weather]
+        case livingWeather, weatherStrength
+        // [1.3 keys welcome]
+        // [1.3 keys tree]
+        // [1.3 keys lights]
+        // [1.3 keys decor]
+        case christmasDecor, goldenFlakes
+        case decorSize
+        // [1.3 keys reindeer]
+        case reindeer, reindeerInterval
     }
 
     var preset: Intensity? {
@@ -115,6 +161,7 @@ struct SimConfig: Codable, Equatable, Sendable {
     static func load(from d: UserDefaults) -> SimConfig {
         guard let data = d.data(forKey: "config") else { return SimConfig() }
         var cfg = decodeLeniently(data)
+        Holidays.migrate(&cfg, stored: data)      // [1.3 holidays] the old Christmas switch → mode
         // The plow used to come at 30 pt – let the hill grow higher now (one-time update of the old default).
         if !d.bool(forKey: "plowHeight60") {
             d.set(true, forKey: "plowHeight60")
@@ -181,6 +228,11 @@ struct SimConfig: Codable, Equatable, Sendable {
         c.skierEvery = fit(skierEvery, Ranges.skierEvery, def.skierEvery)
         c.skierInterval = fit(skierInterval, Ranges.skierEvery, def.skierInterval)
         c.skierCount = fit(skierCount, 1...5, def.skierCount).rounded()
+        c.penguinInterval = fit(penguinInterval, Ranges.penguinInterval, def.penguinInterval)   // [1.3 penguin]
+        c.weatherStrength = fit(weatherStrength, Ranges.weatherStrength, def.weatherStrength)   // [1.3 weather]
+        c.christmasMode = min(max(christmasMode, 0), 2)   // [1.3 holidays]
+        c.decorSize = fit(decorSize, Ranges.treeSize, def.decorSize)   // [1.3 decor]
+        c.reindeerInterval = fit(reindeerInterval, Ranges.penguinInterval, def.reindeerInterval)   // [1.3 reindeer]
         c.fps = Ranges.fps.min { abs($0 - fps) < abs($1 - fps) } ?? def.fps
         c.lightStyle = min(max(lightStyle, Ranges.lightStyle.lowerBound), Ranges.lightStyle.upperBound)
         c.tint = (0..<3).map { i in i < tint.count ? fit(tint[i], 0...1, 1) : 1 }
@@ -205,8 +257,9 @@ struct SimConfig: Codable, Equatable, Sendable {
         static let throwEvery: ClosedRange<Double> = 3...180           // seconds
         static let treeSize: ClosedRange<Double> = 0.5...3
         static let skierEvery: ClosedRange<Double> = 0.5...60          // minutes (from 30 s)
+        static let penguinInterval: ClosedRange<Double> = 1...30       // minutes [1.3 penguin]
         static let fps = [30, 60, 120]
-        static let lightStyle: ClosedRange<Int> = 0...2
+        static let lightStyle: ClosedRange<Int> = 0...(Christmas.LightStyle.allCases.count - 1)   // [1.3 lights]
     }
 }
 

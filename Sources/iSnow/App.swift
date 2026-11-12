@@ -24,6 +24,10 @@ struct MenuContent: View {
     private static let temperatures: [Double] = [-20, -10, -4, 0, 2, 6]
 
     var body: some View {
+        if let update = Updater.shared.menuRelease {                                  // [1.3 updates]
+            Button("iSnow \(update.version) Is Available…") { Updater.shared.showWindow() }
+            Divider()
+        }
         if state.hidden {
             if let until = state.hiddenUntil {
                 Button("Show Effects (until \(until.formatted(date: .omitted, time: .shortened)))") { delegate.showEffects() }
@@ -44,6 +48,10 @@ struct MenuContent: View {
         }
         if state.batterySaverActive && !state.hidden {
             Text("Battery saver on")
+        }
+        // [1.3 weather] "Now: Heavy snow · −7 °C · wind from the west"
+        if settings.config.livingWeather && !settings.paused && !state.hidden, let now = delegate.weather.summary {
+            Text(now.text(fahrenheit: settings.config.fahrenheit))
         }
         Divider()
         Toggle("Snowing", isOn: Binding(get: { !settings.paused }, set: { settings.paused = !$0 }))
@@ -67,7 +75,8 @@ struct MenuContent: View {
         Toggle("Snow on Widgets", isOn: $settings.config.onWidgets)
         Toggle("Snow on the Dock", isOn: $settings.config.onDock)
         Toggle("Snowman", isOn: $settings.config.snowman)
-        Toggle("Christmas Mode", isOn: $settings.config.christmas)
+        Toggle("Christmas Mode", isOn: Binding(get: { settings.config.christmas },      // [1.3 holidays]
+                                               set: { Holidays.setChristmas($0, in: &settings.config) }))
         Toggle("Cursor Scatters Snow", isOn: $settings.config.mouse)
         if !settings.axTrusted && (settings.config.onDock || settings.config.onIcons || settings.config.snowman) {
             Text("Dock position is estimated")
@@ -80,6 +89,7 @@ struct MenuContent: View {
         }
         Button("Shake Off All Snow") { delegate.shakeAll() }
         Button("Shovel Snow at the Bottom") { delegate.shovelBottom() }
+        Button("Things to Try…") { delegate.showWelcome() }      // [1.3 welcome]
         Button("Settings…") { delegate.showSettings() }
             .keyboardShortcut(",")
         Divider()
@@ -93,9 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = Settings.shared
     private let state = AppState.shared
     private let tracker = Tracker()
+    /// [1.3 weather] One weather for every screen (the menu shows its summary).
+    let weather = LivingWeather.fromEnvironment()
     private var renderer: Renderer?
     private var overlays: [Overlay] = []
-    private var panels: [SnowmanPanel] = []
+    private var panels: [Int: SnowmanPanel] = [:]      // keyed by the snowman's stable id
     /// The only repeating timer: window polls, and from there the Dock probe and the power backup.
     /// While the effects are hidden it is a one-shot timer for the end of the hide period.
     private var pollTimer: Timer?
@@ -109,14 +121,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsRelease: DispatchWorkItem?
     private var onBattery = false
     private var lastDock: CGRect?
+    /// An auto-hiding Dock may be sliding in or out until then: its frame is followed closely.
+    private var dockWatchUntil: Double = 0
     /// For the IOKit power-source callback, which cannot capture anything.
     private static weak var current: AppDelegate?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let i = CommandLine.arguments.firstIndex(of: "--promo"), i + 1 < CommandLine.arguments.count {
             // Render the README screenshots (desktop scenes and the settings window), then quit.
+            DebugMemoryGuard.start()
             Promo.run(dir: CommandLine.arguments[i + 1], delegate: self)
             return
+        }
+        if CommandLine.arguments.contains("--dock-probe") {
+            DockProbe.run()          // debug: the Dock's frame from Accessibility over a few seconds
+            exit(0)
         }
         if CommandLine.arguments.contains("--print-dock") {
             // Debug: show the Dock frame estimated without Accessibility.
@@ -126,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
+            DebugMemoryGuard.start()
             Snapshot.run(path: CommandLine.arguments[i + 1])
             exit(0)
         }
@@ -136,11 +156,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         renderer = r
         Self.current = self
-        checkAccessibilityAtLaunch()
+        // [1.3 welcome] Decided before anything writes to UserDefaults (a fresh install has nothing yet).
+        let welcome = Welcome.modeAtLaunch()
+        let axLost = checkAccessibilityAtLaunch(welcome: welcome != nil)
+        Tips.shared.observe(settings.config)
         settings.onChange = { [weak self] in self?.settingsChanged() }
         startPowerMonitor()
         tracker.refreshWindows()
         rebuildOverlays()           // polls once – which also starts the poll timer and the first Dock probe
+        Updater.shared.start()      // [1.3 updates] the daily update check (nothing until ~1 min after launch)
 
         let nc = NotificationCenter.default
         let ws = NSWorkspace.shared.notificationCenter
@@ -169,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A window drag cannot start without a button press: poll quicker as soon as one goes down,
         // so the drift breaks off promptly although the static desktop is polled only 2.5× per second.
         // (Mouse events need no permission for a global monitor; it never sees the event's contents.)
+        Overlay.bottomEdgeTouched = { [weak self] in self?.bottomEdgeTouched() }
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { _ in
             MainActor.assumeIsolated { self.mouseWentDown() }
         }
@@ -205,6 +230,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.poll()
             }
         })
+        // [1.3 welcome] Only on the first launch (or the first after updating) – never on normal launches.
+        if let welcome { Welcome.show(mode: welcome, axLost: axLost, delegate: self) }
+    }
+
+    /// [1.3 welcome] The menu's "Things to Try…".
+    func showWelcome() {
+        Welcome.show(mode: .welcome, delegate: self)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -277,6 +309,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// A mouse button went down somewhere: a window drag may start – look more often until it is released.
+    /// The cursor reached the bottom edge of a screen: an auto-hiding Dock may come up – watch it.
+    private func bottomEdgeTouched() {
+        guard !suspended, !state.hidden, tracker.dockAutoHides, settings.axTrusted else { return }
+        dockWatchUntil = CACurrentMediaTime() + 1.5
+        if pollInterval > PollSchedule.dockWatch { setPollInterval(PollSchedule.dockWatch) }
+    }
+
     private func mouseWentDown() {
         guard !suspended, !state.hidden, pollInterval > PollSchedule.pressed,
               !overlays.allSatisfy({ $0.sim.isFullscreenPaused }) else { return }
@@ -295,6 +334,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !suspended else { stopPolling(); return }
         if state.hideExpired() { showEffects(); return }
         guard !state.hidden else { armHiddenTimer(); return }
+        // [1.3 holidays] automatic Christmas mode; a change polls again by itself (settings onChange)
+        if Holidays.refresh(settings) { return }
         let now = CACurrentMediaTime()
         if now >= nextPowerCheck {
             nextPowerCheck = now + PollSchedule.powerCheck
@@ -302,7 +343,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let allFullscreen = !overlays.isEmpty && overlays.allSatisfy { $0.sim.isFullscreenPaused }
         let wasAnimating = overlays.contains { $0.sim.isAnimating }
-        probeAXIfDue(now: now, animating: wasAnimating, allFullscreen: allFullscreen)
+        // An auto-hiding Dock that is shown (or may be coming up) is followed many times a second, so the
+        // snow rides up with it and falls off as it slides away; otherwise the Dock is probed as usual.
+        if tracker.dockAutoHides {
+            // Backup for the overlay's edge check (it only runs while the snow animates).
+            let m = NSEvent.mouseLocation
+            if NSScreen.screens.contains(where: { m.y <= $0.frame.minY + 1.5 && m.x >= $0.frame.minX && m.x <= $0.frame.maxX }) {
+                dockWatchUntil = max(dockWatchUntil, now + 1.5)
+            }
+        }
+        let watchDock = tracker.dockAutoHides && settings.axTrusted && !allFullscreen
+            && (now < dockWatchUntil || tracker.dockFrame != nil)
+        if watchDock { refreshAX(icons: false) } else { probeAXIfDue(now: now, animating: wasAnimating, allFullscreen: allFullscreen) }
         if fresh { tracker.refreshWindows() }
         if tracker.revision != lastRevision {
             lastRevision = tracker.revision
@@ -311,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cfg = effectiveConfig()
         if tracker.dockFrame != lastDock {
             lastDock = tracker.dockFrame
+            if tracker.dockAutoHides { dockWatchUntil = max(dockWatchUntil, now + 0.8) }   // still sliding
             assignSnowmanHost()
         }
         // Menu bar auto-hide, Dock size and the notch can change without a screen notification – but
@@ -333,7 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             o.calmAtLowerRate = cfg.calmLowerRate
             if o.sim.sync(windows: tracker.windows, occluders: tracker.overlayOccluders, dock: tracker.dockFrame,
                           icons: tracker.icons, widgets: tracker.widgets, dockEstimated: tracker.dockEstimated,
-                          dockAvoid: tracker.dockAvoid,
+                          dockAvoid: tracker.dockAvoid, dockAutoHides: tracker.dockAutoHides,
                           // In a full-screen Space the menu bar windows stay listed (just auto-hidden), but the
                           // Dock's own window disappears – treat that as "no menu bar" for full-screen detection.
                           menuBars: tracker.dockWindowOnScreen ? tracker.menuBars : [],
@@ -349,13 +402,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Self.differ(rects, lastPanelRects) { lastPanelRects = rects; lastChange = now }
         // Follow a dragged window closely so the snow visibly slides off, then calm down again.
         if overlays.contains(where: { $0.sim.windowMoving }) { lastMotion = now; lastChange = now }
+        for o in overlays where o.sim.snowyWindowMoved { o.sim.snowyWindowMoved = false; Tips.shared.mark(.dragWindow) }  // [1.3 welcome]
         let mouse = NSEvent.mouseLocation
-        let atSnowman = panels.contains { $0.isDragging || $0.contains(mouse, margin: 8) }
-        setPollInterval(PollSchedule.interval(
+        let atSnowman = panels.values.contains { $0.isDragging || $0.contains(mouse, margin: 8) }
+        let interval = PollSchedule.interval(
             now: now, lastChange: lastChange, lastMotion: lastMotion,
             buttonDown: NSEvent.pressedMouseButtons != 0, atSnowman: atSnowman,
             animating: overlays.contains { $0.sim.isAnimating },
-            allFullscreen: !overlays.isEmpty && overlays.allSatisfy { $0.sim.isFullscreenPaused }))
+            allFullscreen: !overlays.isEmpty && overlays.allSatisfy { $0.sim.isFullscreenPaused })
+        let dockShownOrComing = tracker.dockAutoHides && (now < dockWatchUntil || tracker.dockFrame != nil)
+        setPollInterval(dockShownOrComing ? min(interval, PollSchedule.dockWatch) : interval)
     }
 
     /// The Dock (and every 4th time the desktop icons) via Accessibility, off the main thread: every
@@ -371,11 +427,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshAX()
     }
 
-    private func refreshAX() {
+    private func refreshAX(icons: Bool = true) {
         axProbes += 1
         let c = settings.config
-        // Desktop icons barely move: every 4th probe.
-        tracker.refreshAX(wantDock: true, wantIcons: c.onIcons && axProbes % 4 == 1) { [weak self] in
+        // Desktop icons barely move: every 4th probe (never while an auto-hiding Dock is followed closely).
+        tracker.refreshAX(wantDock: true, wantIcons: icons && c.onIcons && axProbes % 4 == 1) { [weak self] in
             // Only called when the Dock or the icons changed.
             guard let self else { return }
             self.axStable = 0
@@ -471,6 +527,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The settings as the simulations get them: lighter on battery and in Low Power Mode.
     private func effectiveConfig() -> SimConfig {
         var c = settings.config
+        // [1.3 weather] Snowfall, wind and temperature wander around the sliders (never written back);
+        // the power savings below then apply on top, so maxFlakes stays the hard cap.
+        weather.apply(to: &c, now: CACurrentMediaTime())
+        if state.batterySaverActive || ProcessInfo.processInfo.isLowPowerModeEnabled { c.weatherPowder = 0 }
         if state.batterySaverActive {
             c.fps = min(c.fps, 30)
             c.maxFlakes = min(c.maxFlakes, 500)
@@ -489,7 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             o.setRenderScale(retina ? (screens[o.screenID]?.backingScaleFactor ?? 2) : 1)
             o.setHiddenFromCapture(cfg.hideFromCapture)
         }
-        for p in panels { p.setHiddenFromCapture(cfg.hideFromCapture) }
+        for p in panels.values { p.setHiddenFromCapture(cfg.hideFromCapture) }
     }
 
     // MARK: - Hide effects
@@ -532,23 +592,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Positions the snowman panels; returns the snowmen's click targets (local coordinates).
     @discardableResult
     private func updatePanel() -> [CGRect?] {
-        let rects = state.hidden || suspended ? [] : snowmanOverlay?.sim.snowmanHitRects ?? []
-        while panels.count < rects.count {
-            let i = panels.count
+        let targets = state.hidden || suspended ? [] : snowmanOverlay?.sim.snowmanTargets ?? []
+        // One panel per snowman, keyed by its id, so a panel keeps its snowman while others come and go.
+        for t in targets where panels[t.id] == nil {
+            let id = t.id
             let p = SnowmanPanel()
-            p.onClick = { [weak self] pt in self?.withSnowman { o, l in o.sim.snowmanClicked(i, at: l(pt)) } }
-            p.onDrag = { [weak self] pt in self?.withSnowman { o, l in o.sim.dragSnowman(i, to: l(pt)) } }
-            p.onDrop = { [weak self] _ in self?.withSnowman { o, _ in o.sim.dropSnowman(i) } }
+            p.onClick = { [weak self] pt in
+                Tips.shared.mark(.clickSnowman)                                       // [1.3 welcome]
+                self?.withSnowman { o, l in o.sim.snowmanClicked(id: id, at: l(pt)) }
+            }
+            p.onDrag = { [weak self] pt in
+                Tips.shared.mark(.dragSnowman)                                        // [1.3 welcome]
+                self?.withSnowman { o, l in o.sim.dragSnowman(id: id, to: l(pt)) }
+            }
+            p.onDrop = { [weak self] _ in self?.withSnowman { o, _ in o.sim.dropSnowman(id: id) } }
             p.setHiddenFromCapture(settings.config.hideFromCapture)
-            panels.append(p)
+            panels[id] = p
         }
-        while panels.count > rects.count { panels.removeLast().close() }
+        let alive = Set(targets.map(\.id))
+        for (id, p) in panels where !alive.contains(id) {
+            if p.isDragging { withSnowman { o, _ in o.sim.dropSnowman(id: id) } }
+            p.close()
+            panels[id] = nil
+        }
+        let rects = targets.map(\.rect)
         guard let o = snowmanOverlay, settings.config.snowman else {
-            panels.forEach { $0.update(nil) }
+            panels.values.forEach { $0.update(nil) }
             return rects
         }
-        for (i, r) in rects.enumerated() {
-            panels[i].update(r.map { $0.offsetBy(dx: o.sim.origin.x, dy: o.sim.origin.y) })
+        for t in targets {
+            panels[t.id]?.update(t.rect.map { $0.offsetBy(dx: o.sim.origin.x, dy: o.sim.origin.y) })
         }
         return rects
     }
@@ -573,6 +646,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         metricsDirty = true
         poll(fresh: false)
         for o in overlays { o.wake() }
+        Tips.shared.observe(settings.config)                                          // [1.3 welcome]
     }
 
     func buildSnowmanNow() {
@@ -588,8 +662,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for o in overlays where o.sim.sendSkier() { o.wake(); break }
     }
 
+    /// Sends a penguin along the bottom of the screen with the snowman. [1.3 penguin]
+    func sendPenguin() {
+        for o in overlays where o.sim.sendPenguin() { o.wake(); break }
+    }
+
+    /// Sends a reindeer along the bottom of the screen with the snowman. [1.3 reindeer]
+    func sendReindeer() {
+        for o in overlays where o.sim.sendReindeer() { o.wake(); break }
+    }
+
     func launchSanta() {
         for o in overlays where o.sim.hostsSnowman { o.sim.launchSanta(); o.wake() }
+    }
+
+    func launchFireworks() {                       // [1.3 holidays]
+        for o in overlays where o.sim.hostsSnowman { o.sim.launchFireworks(); o.wake() }
     }
 
     func shovelBottom() {
@@ -678,7 +766,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func checkAccessibilityAtLaunch() {
+    /// Returns whether the permission was lost. `welcome`: the welcome window opens on this launch and
+    /// asks (or explains the loss) itself – no system prompt or alert on top of it. [1.3 welcome]
+    @discardableResult
+    private func checkAccessibilityAtLaunch(welcome: Bool = false) -> Bool {
         settings.axTrusted = AXIsProcessTrusted()
         let d = UserDefaults.standard
         if settings.axTrusted {
@@ -687,15 +778,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // It worked before and now it doesn't: macOS dropped the permission (usually after an update),
             // although the switch in System Settings may still look on. Explain once per loss.
             d.set(false, forKey: Self.axGrantedKey)
+            if welcome { return true }
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1.5))
                 self.showAccessibilityLostAlert()
             }
+            return true
         } else if settings.config.onDock || settings.config.onIcons, !d.bool(forKey: "askedAccessibility") {
-            // Ask once for Accessibility (snow on the Dock and desktop icons).
-            d.set(true, forKey: "askedAccessibility")
-            Tracker.requestAccessibility()
+            // Ask once for Accessibility (snow on the Dock and desktop icons). On a launch with the welcome
+            // window, its card asks instead – the system prompt then comes on the next launch if still needed.
+            if !welcome {
+                d.set(true, forKey: "askedAccessibility")
+                Tracker.requestAccessibility()
+            }
         }
+        return false
     }
 
     private func showAccessibilityLostAlert() {

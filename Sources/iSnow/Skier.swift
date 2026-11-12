@@ -143,6 +143,14 @@ struct Skier {
 
     typealias Floor = (Float, Float) -> (top: Float, pile: Pile?)
 
+    /// An auto-hiding Dock came up right under the skier: it is launched into the air off the Dock.
+    mutating func liftedByDock(to top: Float) {
+        y = top
+        phase = .flying
+        vx = dir * max(speed, 60); vy = 160
+        airT = 0; trick = .none
+    }
+
     /// Advances the skier. `host` is the drift it started on (nil if gone), `floor(x, y)` the top of the
     /// highest surface (with its snow) below a point. Returns false when the skier is gone.
     mutating func step(dt rawDt: Float, host: Pile?, width W: Float, debris: inout [Debris], floor: Floor) -> Bool {

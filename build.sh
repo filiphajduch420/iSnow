@@ -60,6 +60,9 @@ if (( SIGN )); then
   # Pick the certificate by its SHA-1 hash – names can be ambiguous (several certificates, same name).
   CERT="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $2; exit}')"
   if [[ -n "$CERT" ]]; then
+    # A developer build: the in-app updater leaves it alone (installing an ad-hoc release over it would
+    # drop the Accessibility permission tied to this certificate).
+    /usr/libexec/PlistBuddy -c "Add :ISnowDeveloperBuild bool true" "$APP/Contents/Info.plist"
     codesign --force --sign "$CERT" "$APP"
     echo "Signed with: $(security find-identity -v -p codesigning | awk -F'"' -v h="$CERT" '$0 ~ h {print $2; exit}') ($CERT)"
   else

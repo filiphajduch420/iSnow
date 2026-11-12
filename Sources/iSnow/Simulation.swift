@@ -28,6 +28,12 @@ struct Snowball {
     var x, y, vx, vy, t, duration: Float
     var target: Int       // drift key, -999 = none
     var tx: Float
+    // [1.3 snowmen] snowball fights
+    var victim = -1                   // id of the snowman it is aimed at (-1 = none)
+    var thrower = -2                  // -1 = the user, ≥ 0 = snowman id, -2 = a plain throw
+    var floor: Float = -.infinity     // a ball that missed flies on and splats when it falls to this height
+    var size: Float = 7.5             // drawn size at the start …
+    var endSize: Float = 7.5          // … and at the end (the user's throw shrinks as it flies away from you)
 }
 
 struct Icicle {
@@ -95,6 +101,7 @@ final class Simulation {
     }
 
     private(set) var flakes: [Flake] = []
+    private var parkedFlakes: [Flake] = []   // the snowfall in the air, kept while a full-screen app hides it
     private var debris: [Debris] = []
     private var shards: [Shard] = []
     private var snowballs: [Snowball] = []
@@ -115,15 +122,39 @@ final class Simulation {
     private var menuMeshKey: (bar: CGFloat, occ: [CGRect]) = (-1, [])
     private var garlandCache = Christmas.LightCache()
     private var treeCache = Christmas.LightCache()
+    // [1.3 holidays] presents, countdown sign, fireworks (HolidayScene); lights on the frontmost window
+    private(set) var holiday = HolidayScene()
+    private var windowLightCache = Christmas.LightCache()
+    private var holidaySpot: (x: Float, side: Float)?  // where the tree stands (or would): sign and presents
+    // [1.3 decor] gingerbread house, candy canes and saplings (ChristmasDecor)
+    var decorItems = ChristmasDecor.scatter()         // settable for debug renders (ISNOW_DECOR=canes)
+    private var housePos: (x: Float, y: Float)?
+    private var houseGhost = false
+    private var decorBlocked: [ClosedRange<Float>] = []   // x ranges kept free of candy canes and saplings
     var snowmen: [Snowman] = []
+    // [1.3 snowmen] runtime only (not persisted), set by the holidays code.
+    var rollKeys = false                      // ⌥⇧ held: roll a snowball instead of shovelling (set by the overlay)
+    private var rollHeld: Float = 0
+    private var yard = SnowYard()
+    var seasonalHat: Snowman.Hat? = nil       // overrides every snowman's wardrobe hat
+    var sparklers = false                     // snowmen hold a sparkler (New Year's Eve)
     private var windowRects: [(key: Int, rect: CGRect)] = []   // front to back
     private var dockLocal: CGRect?
     private var treePos: (x: Float, y: Float)?
     private var noIcicles: CGRect?          // the Dock (plus a margin): icicles never hang into it
     private var dockGuessed = false         // the Dock's frame is only estimated (no Accessibility)
+    /// The Dock auto-hides: `dockLocal` follows it live as it slides in and out (nil while hidden).
+    private var dockTransient = false
+    /// Where an auto-hiding Dock stands when it is fully shown (remembered while it is hidden).
+    private var dockRest: CGRect?
+    /// The Dock that the tree, the decorations and the snowmen line up with. An auto-hiding Dock comes and
+    /// goes: they keep to the ground beside the place where it shows up.
+    private var layoutDock: CGRect? { dockTransient ? dockRest : dockLocal }
+    private var lastDockTop: Float = -1000    // the auto-hiding Dock's top at the last sync (rising = coming up)
     private var avoidLocal: CGRect?         // area around the Dock kept free of other snow
     private var treeGhost = false
     private var treeHidden = false            // under a menu or popover
+    private var treeSnow: Float = 0           // [1.3 tree] snow on the branches, 0…1 in quarter steps
     private var localOcc: [CGRect] = []       // menus, popovers, notifications (local coordinates)
     private var keepVanishedUntil: Double = 0 // after a Space switch, vanished windows keep their snow
     private var activeRect: CGRect?           // the frontmost window (snow is calmer over it)
@@ -144,6 +175,9 @@ final class Simulation {
     private var time: Double = 0
     private var spawnAcc: Double = 0
     private var wind: Float = 0
+    // [1.3 weather] the living weather's steady wind and gusts (smoothed) and powder blown off drift crests
+    private var weatherWind: Float = 0
+    private var blownPowder: [Debris] = []
     private var meshTimer: Double = 0
     private var cfg = SimConfig()
     private var fullscreen = false
@@ -152,6 +186,10 @@ final class Simulation {
     private var kickedUntil: Double = 0        // the cursor scattered flakes – they fly fast until then
     /// True when a window moved during the last sync (the app then polls faster).
     private(set) var windowMoving = false
+    /// [1.3 welcome] Set when a window with a drift moved / the ⌥ shovel moved snow; the app
+    /// ticks the welcome window's Things to Try and clears them.
+    var snowyWindowMoved = false
+    var shoveled = false
     private var tint: (Float, Float, Float) = (1, 1, 1)
 
     /// Height of the camera housing (notch) – full-screen windows end below it.
@@ -187,6 +225,7 @@ final class Simulation {
     @discardableResult
     func sync(windows: [TrackedWindow], occluders: [CGRect], dock: CGRect?, icons: [CGRect],
               widgets: [TrackedWindow] = [], dockEstimated: Bool = false, dockAvoid: CGRect? = nil,
+              dockAutoHides: Bool = false,
               menuBars: [CGRect]? = nil, activeWindow: CGRect? = nil, now: Double, cfg: SimConfig) -> Bool {
         let tintChanged = cfg.tint != self.cfg.tint
         let capsChanged = cfg.windowDepth != self.cfg.windowDepth || cfg.groundDepth != self.cfg.groundDepth
@@ -220,12 +259,19 @@ final class Simulation {
         if fullscreen != wasFull {
             changed = true
             if fullscreen && cfg.fullscreenSnow < 0.02 {
-                // Clear the air at once so nothing drifts over a video or presentation.
+                // Clear the air at once so nothing drifts over a video or presentation – but keep the flakes
+                // aside, so back on the desktop the snowfall carries on mid-air instead of starting at the top.
+                parkedFlakes = flakes
                 flakes.removeAll(keepingCapacity: true)
                 debris.removeAll(keepingCapacity: true)
                 snowballs.removeAll()
                 shards.removeAll()
             }
+        }
+        if !fullscreen && wasFull && !parkedFlakes.isEmpty {
+            let room = max(0, Int(cfg.maxFlakes) - flakes.count)
+            flakes.append(contentsOf: parkedFlakes.prefix(room))
+            parkedFlakes = []
         }
         windowMoving = false
         var seen = Set<Int>()
@@ -280,10 +326,19 @@ final class Simulation {
                         return p
                     }
                 }
+                if p.kind == .dock, dockTransient, !resized, dy > 0.5 {
+                    // An auto-hiding Dock sliding up carries its snow along (sliding down, it drops it below).
+                    p.rect = r
+                    p.lastSeen = now
+                    p.dirty = true
+                    changed = true
+                    return p
+                }
                 if abs(dx) > 0.5 || abs(dy) > 0.5 || resized {
                     let dt = Float(max(1.0 / 60, min(0.5, now - p.lastSeen)))
                     let vel = SIMD2(dx / dt, dy / dt)
                     let dist = (dx * dx + dy * dy).squareRoot()
+                    if p.kind == .window && !resized && (p.bins.max() ?? 0) > 3 { snowyWindowMoved = true }   // [1.3 welcome]
                     if !resized && dist < 4 && p.kind == .window {
                         // A nudge: the drift rides along, only the loose top layer shakes off.
                         p.rect = r
@@ -310,6 +365,7 @@ final class Simulation {
         }
 
         dockGuessed = dockEstimated
+        dockTransient = dockAutoHides
         // An estimated Dock may be wider than we think – keep a generous margin around it.
         let dockMargin: CGFloat = dockEstimated ? 30 : 6
         let avoid = (dockAvoid ?? dock)?.offsetBy(dx: -origin.x, dy: -origin.y)
@@ -335,17 +391,25 @@ final class Simulation {
         windowRects = rects
         // Dock – its drift reaches above the Dock, so windows hide it (e.g. a zoomed window).
         dockLocal = nil
+        if !dockTransient { dockRest = nil }
         if let d = dock?.offsetBy(dx: -origin.x, dy: -origin.y), d.intersects(bounds), d.maxY > 6 {
             dockLocal = d
+            if dockTransient, d.minY >= 0, d.minY < size.height / 2 { dockRest = d }
             if cfg.onDock {
                 // Snow lies right on the Dock's top edge. Where a window sits above the Dock it stays a
                 // thin ledge, so it never covers the window (or the icons below).
+                let appears = piles[Self.dockKey] == nil
                 let p = upsert(key: Self.dockKey, kind: .dock, rect: d)
                 if updateVisibility(p, occluders: localOcc) { changed = true }
                 if updateDockLimit(p, windows: Array(front.dropFirst(localOcc.count)), mouse: mouseLocal) { changed = true }
+                // An auto-hiding Dock coming up from below the screen edge pushes the snow lying there up.
+                if appears && dockTransient && d.minY < -1 { liftGround(onto: p); changed = true }
                 order.append(p)
             }
         }
+        // An auto-hiding Dock coming up tosses whoever is in its way up onto it, or shoves snowmen aside.
+        if dockTransient, hostsSnowman, let d = dockLocal, Float(d.maxY) > lastDockTop + 0.5 { pushedByDock(d) }
+        lastDockTop = dockLocal.map { Float($0.maxY) } ?? -1000
         // Desktop icons – they sit below all windows.
         if cfg.onIcons {
             for f in icons {
@@ -405,6 +469,8 @@ final class Simulation {
             }
         }
         if hostsSnowman { syncSnowmen(); syncTree() }
+        if hostsSnowman { syncDecor() }                   // [1.3 decor]
+        if syncHolidays() { changed = true }              // [1.3 holidays] the sign changed
         return changed
     }
 
@@ -557,8 +623,10 @@ final class Simulation {
         let fdt = Float(dt)
         mouseLocal = mouse.map { SIMD2(Float($0.x), Float($0.y)) }
         // ⌥ only becomes a shovel after a short hold, so typing ⌥-characters doesn't shovel.
-        shovelHeld = shovel ? shovelHeld + fdt : 0
+        shovelHeld = shovel && !rollKeys ? shovelHeld + fdt : 0
+        rollHeld = rollKeys ? rollHeld + fdt : 0          // [1.3 snowmen]
         wind = Float(cfg.wind) * Float(sin(time * 0.071) * 16 + sin(time * 0.23) * 6 + sin(time * 0.017) * 12)
+        stepWeather(dt: fdt)                    // [1.3 weather] adds the steady wind and gusts to `wind`
 
         if !cfg.paused && (!fullscreen || cfg.fullscreenSnow >= 0.02) {
             spawnAcc += 28 * cfg.density * Double(size.width) / 1000 * dt
@@ -573,7 +641,8 @@ final class Simulation {
             let m = SIMD2(Float(mouse.x), Float(mouse.y))
             if shovelHeld > 0.25 {
                 shovelAt = m                 // the shovel follows the cursor while ⌥ is held
-                stepShovel(m, dt: fdt)
+                // [1.3 snowmen] over a snowman ⌥ means aiming a snowball, not digging
+                if !aiming(at: m) { stepShovel(m, dt: fdt) }
             }
             stepMouse(m, dt: fdt)
         } else { lastMouse = nil }
@@ -667,7 +736,9 @@ final class Simulation {
             s.vy -= 600 * fdt
             s.x += s.vx * fdt
             s.y += s.vy * fdt
-            if s.t >= s.duration {
+            if s.t >= s.duration || (s.y <= s.floor && s.vy < 0) {
+                // [1.3 snowmen] aimed at a snowman that ducked: it flies on
+                if s.victim >= 0 && !snowballLands(&s) { snowballs[i] = s; i += 1; continue }
                 splat(s)
                 snowballs.swapAt(i, snowballs.count - 1); snowballs.removeLast(); continue
             }
@@ -784,6 +855,8 @@ final class Simulation {
         }
 
         if hostsSnowman { stepSnowmen(dt: fdt); stepSanta(dt: fdt) }
+        stepHolidays(fdt)                                  // [1.3 holidays]
+        stepYard(dt: fdt)                       // [1.3 snowmen]
         if hostsSnowman && cfg.snowplow && !cfg.paused && !fullscreen {
             // Every couple of seconds: is the snow at the bottom high enough to call the plow?
             nextAutoPlow -= dt
@@ -797,6 +870,8 @@ final class Simulation {
                       dock: dockLocal, dockPile: piles[Self.dockKey])
         }
         stepSkier(dt: dt)
+        stepPenguins(dt: dt)            // [1.3 penguin]
+        stepReindeer(dt: dt)            // [1.3 reindeer]
     }
 
     // MARK: - Skier
@@ -875,7 +950,7 @@ final class Simulation {
 
     /// Top of the snow on the highest surface below (x, y) – where a jumping skier lands.
     private func skierFloor(_ x: Float, _ y: Float) -> (top: Float, pile: Pile?) {
-        let s = surfaceBelow(x: x, y: y)
+        let s = surfaceBelow(x: x, y: y, liveDock: true)     // visitors use an auto-hiding Dock while it is shown
         return (s.top + driftHeight(s.key, at: x), piles[s.key])
     }
 
@@ -898,6 +973,173 @@ final class Simulation {
         plow.startAutopilot(leftToRight: Bool.random(), screenWidth: W)
     }
 
+    // MARK: - Penguin [1.3 penguin]
+
+    private var penguins: [Penguin] = []
+    private var nextPenguin: Double = -1        // set from the settings on the first frame
+    private var chickIn: Double?                // a chick follows its parent this many seconds later
+    private var penguinDir: Float = 1
+
+    /// Where the penguins are (for debug snapshots).
+    var penguinSpots: [String] { penguins.map { "\($0.x) \($0.y) dir \($0.dir) \($0.act)" } }
+
+    private func penguinInterval() -> Double { max(1, cfg.penguinInterval) * 60 * Double.random(in: 0.8...1.2) }
+
+    /// Send a penguin along the bottom right now (settings button). False if one is already out.
+    func sendPenguin() -> Bool {
+        guard hostsSnowman, !fullscreen, penguins.isEmpty, chickIn == nil, startPenguin(chick: false) else { return false }
+        nextPenguin = penguinInterval()
+        return true
+    }
+
+    /// A penguin waddles in from a screen edge (now and then followed by its chick).
+    private func startPenguin(chick: Bool) -> Bool {
+        guard piles[Self.groundKey] != nil else { return false }
+        if !chick {
+            penguinDir = Bool.random() ? 1 : -1
+            chickIn = Double.random(in: 0..<1) < 0.2 ? Double.random(in: 1.6...2.4) : nil
+        }
+        let x: Float = penguinDir > 0 ? -14 : W + 14
+        let size = min(1.6, max(0.85, 0.8 + 0.27 * Float(cfg.snowmanSize)))
+        var p = Penguin(x: x, y: skierFloor(x, 1).top, dir: penguinDir, chick: chick, size: size)
+        p.hat = cfg.christmas && cfg.christmasHats && !chick
+        p.scarf = cfg.christmas && (chick || !cfg.christmasHats)
+        penguins.append(p)
+        return true
+    }
+
+    private func stepPenguins(dt: Double) {
+        guard hostsSnowman, !fullscreen else { penguins = []; chickIn = nil; return }
+        if cfg.penguin && !cfg.paused && penguins.isEmpty && chickIn == nil && cfg.temperature <= 2 {
+            if nextPenguin < 0 { nextPenguin = min(penguinInterval(), 120) }     // the first one comes soon
+            nextPenguin -= dt
+            if nextPenguin <= 0 { nextPenguin = reindeer.isEmpty && startPenguin(chick: false) ? penguinInterval() : 30 }   // [1.3 reindeer] one visitor at a time
+        }
+        if let c = chickIn {
+            chickIn = c - dt
+            if c - dt <= 0 { chickIn = nil; if !penguins.isEmpty { _ = startPenguin(chick: true) } }
+        }
+        guard !penguins.isEmpty else { return }
+        let parentX = penguins.first { !$0.chick }?.x
+        var i = 0
+        while i < penguins.count {
+            var p = penguins[i]
+            p.leaderX = p.chick ? parentX : nil
+            // A snowball flying close by: duck.
+            let c = p.center
+            if snowballs.contains(where: { abs($0.x - c.x) < 60 && abs($0.y - c.y) < 50 }) { p.duck() }
+            // Passing a standing snowman: wave to it – and it waves back.
+            if !cfg.paused {
+                for k in snowmen.indices where snowmen[k].phase == .standing && !snowmen[k].hidden && !snowmen[k].ghost {
+                    let sx = snowmen[k].anchorX
+                    guard abs(sx - p.x) < 34 * p.size + snowmen[k].R(0), abs(snowmen[k].baseY - p.y) < 30,
+                          p.greet(snowmanAt: sx) else { continue }
+                    if snowmen[k].wave <= 0 { snowmen[k].wave = 1.6 }
+                }
+            }
+            let alive = p.step(dt: Float(dt), width: W, mouse: mouseLocal, paused: cfg.paused, debris: &debris) { x, y in
+                self.skierFloor(x, y)
+            }
+            if alive { penguins[i] = p; i += 1 } else { penguins.remove(at: i) }
+        }
+    }
+
+    // MARK: - Reindeer [1.3 reindeer]
+
+    private var reindeer: [Reindeer] = []
+    private var nextReindeer: Double = -1       // set from the settings on the first frame
+    private var noseBack: [Int: Double] = [:]   // snowman id → when it finds a new carrot
+
+    /// Where the reindeer are (for debug snapshots).
+    var reindeerSpots: [String] { reindeer.map { "\($0.x) \($0.y) dir \($0.dir) \($0.act)" } }
+
+    private func reindeerInterval() -> Double { max(1, cfg.reindeerInterval) * 60 * Double.random(in: 0.8...1.2) }
+
+    /// Send a reindeer along the bottom right now (settings button). False if one is already out.
+    func sendReindeer() -> Bool {
+        guard hostsSnowman, !fullscreen, reindeer.isEmpty, startReindeer() else { return false }
+        nextReindeer = reindeerInterval()
+        return true
+    }
+
+    private func startReindeer() -> Bool {
+        guard piles[Self.groundKey] != nil else { return false }
+        let dir: Float = Bool.random() ? 1 : -1
+        let x: Float = dir > 0 ? -30 : W + 30
+        // As tall at the nose as a snowman's carrot, more or less (it rears up for the rest).
+        let size = min(2.6, max(0.9, 1.4 * Float(cfg.snowmanSize)))
+        // Rudolph comes more often after dark and on 24–26 December.
+        let day = Holidays.info(at: Holidays.now())
+        let rudolph: Float = day.giftDays ? 0.6 : (day.hour >= 17 || day.hour < 7) ? 0.4 : 0.2
+        reindeer.append(Reindeer(x: x, y: skierFloor(x, 1).top, dir: dir, size: size,
+                                 rudolph: Float.random(in: 0..<1) < rudolph))
+        return true
+    }
+
+    /// The tip of a standing snowman's carrot nose (nil if it has none or is busy).
+    private func carrotTip(_ s: Snowman) -> SIMD2<Float>? {
+        guard s.phase == .standing, s.hasCarrot, s.levels == 3, !s.hidden, !s.ghost, !s.carried, !s.falling,
+              let h = s.ball(2) else { return nil }
+        let k = s.sizeScale * s.scale
+        return SIMD2(h.x + h.r + 5 * k, h.y - 0.6 * k)
+    }
+
+    private func stepReindeer(dt: Double) {
+        guard hostsSnowman, !fullscreen else { reindeer = []; return }
+        if cfg.christmas && cfg.reindeer && !cfg.paused && reindeer.isEmpty {
+            if nextReindeer < 0 { nextReindeer = min(reindeerInterval(), 150) }     // the first one comes soon
+            nextReindeer -= dt
+            if nextReindeer <= 0 { nextReindeer = penguins.isEmpty && startReindeer() ? reindeerInterval() : 20 }
+        }
+        // A snowman that lost its nose finds a new carrot after a while.
+        for (id, at) in noseBack where time >= at {
+            noseBack[id] = nil
+            if let k = snowmanIndex(id), snowmen[k].phase == .standing, snowmen[k].levels == 3 {
+                snowmen[k].hasCarrot = true
+                snowmen[k].wobble = max(snowmen[k].wobble, 0.4)
+            }
+        }
+        guard !reindeer.isEmpty else { return }
+        var i = 0
+        while i < reindeer.count {
+            var r = reindeer[i]
+            let c = r.center
+            if let b = snowballs.first(where: { abs($0.x - c.x) < 60 && abs($0.y - c.y) < 50 }) { r.bolt(from: b.x) }
+            if !cfg.paused {
+                if let tg = r.target {
+                    // Still there, nose and all?
+                    let ok = snowmanIndex(tg.id).flatMap { carrotTip(snowmen[$0]) }
+                        .map { abs($0.x - tg.tip.x) < 3 && abs($0.y - tg.tip.y) < 3 } ?? false
+                    if !ok { r.dropTarget() }
+                } else if r.canAim {
+                    for s in snowmen where !r.tried(s.id) {
+                        guard let tip = carrotTip(s), abs(s.anchorX - r.x) < 280, abs(s.baseY - r.y) < 90 else { continue }
+                        let ground = skierFloor(s.anchorX, s.baseY + 15).top          // the snow the snowman stands on
+                        if r.aim(snowman: s.id, tip: tip, ground: ground, floor: { x, y in self.skierFloor(x, y) }) { break }
+                    }
+                }
+            }
+            let alive = r.step(dt: Float(dt), width: W, mouse: mouseLocal, paused: cfg.paused, debris: &debris) { x, y in
+                self.skierFloor(x, y)
+            }
+            if let id = r.bit {
+                // Crunch: the carrot is gone and the snowman wobbles and waves its arms.
+                r.bit = nil
+                if let k = snowmanIndex(id), snowmen[k].hasCarrot {
+                    snowmen[k].hasCarrot = false
+                    snowmen[k].wobble = 1
+                    snowmen[k].wave = 1.6
+                    noseBack[id] = time + Double.random(in: 40...80)
+                }
+            }
+            if r.act == .reach || r.act == .chew, let k = snowmen.indices.min(by: {
+                abs(snowmen[$0].anchorX - r.x) < abs(snowmen[$1].anchorX - r.x) }), abs(snowmen[k].anchorX - r.x) < 90 {
+                snowmen[k].lookAt = r.center + SIMD2(0, 14 * r.size)        // the snowman stares at the thief
+            }
+            if alive { reindeer[i] = r; i += 1 } else { reindeer.remove(at: i) }
+        }
+    }
+
     /// True while something fast is on screen and the display link should run at the user's full rate.
     /// Ambient snowfall, faded full-screen snow, twinkling lights, glints, a snowman that just stands
     /// (its eyes following the cursor) and frozen (paused) scenes return false.
@@ -908,7 +1150,11 @@ final class Simulation {
         // Everything else is mesh, which is not drawn over a full-screen app.
         if fullscreen { return false }
         if !shards.isEmpty || !skiers.isEmpty || plow.visible || santa != nil || shovelAt != nil { return true }
+        if hostsSnowman && holiday.isAlive { return true }        // [1.3 holidays] fireworks, falling presents
+        if hostsSnowman && yard.isMoving { return true }        // [1.3 snowmen] a ball being rolled
         if !queuedSkiers.isEmpty && !cfg.paused { return true }        // the rest of a group about to set off
+        if penguins.contains(where: { $0.isMoving }) { return true }  // [1.3 penguin]
+        if reindeer.contains(where: { $0.isMoving }) { return true }  // [1.3 reindeer]
         guard hostsSnowman else { return false }
         // A snowman's life cycle is frozen while paused, so only one in your hand or in the air moves then.
         let alive = cfg.snowman && !cfg.paused
@@ -923,9 +1169,15 @@ final class Simulation {
             return (!cfg.paused && cfg.fullscreenSnow >= 0.02) || !flakes.isEmpty || !debris.isEmpty
         }
         if !skiers.isEmpty || !queuedSkiers.isEmpty { return true }
+        if !penguins.isEmpty || chickIn != nil { return true }        // [1.3 penguin] it waddles off
+        if !reindeer.isEmpty { return true }                          // [1.3 reindeer] it trots off
         // Paused: the lights only keep twinkling if the user wants that.
-        if cfg.christmas && cfg.lightsWhilePaused && (cfg.christmasGarland || treePos != nil) { return true }
+        if cfg.christmas && cfg.lightsWhilePaused && (cfg.christmasGarland || treePos != nil
+                                                       || (cfg.windowLights && windowLightSpan() != nil)) { return true }   // [1.3 holidays] window lights
+        if cfg.christmas && cfg.lightsWhilePaused && hostsSnowman && housePos != nil { return true }   // [1.3 decor] lit windows, smoke
+        if hostsSnowman && holiday.isAlive { return true }        // [1.3 holidays] fireworks, falling presents
         if !flakes.isEmpty || !debris.isEmpty || !shards.isEmpty || !snowballs.isEmpty || santa != nil { return true }
+        if !blownPowder.isEmpty { return true }      // [1.3 weather] powder still in the air fades out (not frozen)
         if plow.isMoving || plow.input != 0 { return true }
         // While paused only a snowman in your hand or in the air needs frames.
         return hostsSnowman && snowmen.contains { $0.carried || $0.falling }
@@ -1076,6 +1328,83 @@ final class Simulation {
             if p.bins[0] > e { p.bins[0] = e }
             if p.bins[n - 1] > e { p.bins[n - 1] = e }
         }
+        p.dirty = true
+    }
+
+    /// An auto-hiding Dock is coming up: penguins, reindeer and skiers in its way are tossed up onto it.
+    /// A snowman standing at the bottom where it comes up is lifted onto it with a little hop (one put on the
+    /// Dock that fell off as it slid away goes back up with it); one only half over its end is shoved aside.
+    private func pushedByDock(_ d: CGRect) {
+        let lo = Float(d.minX) - 2, hi = Float(d.maxX) + 2
+        func top(_ x: Float) -> Float { Float(d.maxY) + driftHeight(Self.dockKey, at: x) }
+        for i in penguins.indices where penguins[i].x > lo && penguins[i].x < hi && penguins[i].y < top(penguins[i].x) - 1 {
+            penguins[i].liftedByDock(to: top(penguins[i].x))
+        }
+        for i in reindeer.indices where reindeer[i].x > lo && reindeer[i].x < hi && reindeer[i].y < top(reindeer[i].x) - 1 {
+            reindeer[i].liftedByDock(to: top(reindeer[i].x))
+        }
+        for i in skiers.indices where skiers[i].x > lo && skiers[i].x < hi && skiers[i].y < top(skiers[i].x) - 1 {
+            skiers[i].liftedByDock(to: top(skiers[i].x))
+        }
+        var shoved: (left: Float, right: Float) = (0, 0)    // how far the row beside each end already reaches
+        for i in snowmen.indices {
+            let s = snowmen[i]
+            let half = 30 * s.scale * s.sizeScale
+            guard !s.carried, !s.falling, s.hostKey == Self.groundKey,
+                  s.anchorX > Float(d.minX) - half, s.anchorX < Float(d.maxX) + half else { continue }
+            if s.anchorX > Float(d.minX) + half * 0.5, s.anchorX < Float(d.maxX) - half * 0.5 {
+                // The Dock comes up faster than a hop: it simply picks the snowman up (with a jolt), and it rides
+                // along from then on (see syncSnowmen).
+                snowmen[i].hostKey = Self.dockKey
+                snowmen[i].hostRect = d
+                snowmen[i].offsetX = s.anchorX - Float(d.minX)
+                snowmen[i].baseY = top(s.anchorX) * 0.85 + Float(d.maxY) * 0.15
+                snowmen[i].userPlaced = true
+                snowmen[i].wobble = 1
+                continue
+            }
+            let left = s.anchorX - Float(d.minX) < Float(d.maxX) - s.anchorX
+            let x = left ? Float(d.minX) - shoved.left - half - 4 : Float(d.maxX) + shoved.right + half + 4
+            guard x > half, x < W - half else { continue }      // no room beside the Dock: leave it be
+            if left { shoved.left += 2 * half + 4 } else { shoved.right += 2 * half + 4 }
+            snowmen[i].anchorX = x
+            snowmen[i].offsetX = x
+            snowmen[i].falling = true
+            snowmen[i].vy = 140
+        }
+    }
+
+    /// An auto-hiding Dock rises out of the snow at the bottom: the snow above it is lifted onto the Dock
+    /// (as much as it holds), and the rest is thrown off to the sides with a puff of powder.
+    private func liftGround(onto p: Pile) {
+        guard let g = piles[Self.groundKey], !p.bins.isEmpty else { return }
+        let x0 = Float(p.rect.minX), mid = Float(p.rect.midX)
+        var room = max(0, 9000 - debris.count)
+        for i in 0..<p.bins.count {
+            let x = x0 + (Float(i) + 0.5) * Self.binW
+            let gi = Int(x / Self.binW)
+            guard gi >= 0, gi < g.bins.count else { continue }
+            let h = g.bins[gi]
+            g.bins[gi] = 0
+            guard h > 0.05 else { continue }
+            let keep = min(h, p.cap)
+            p.bins[i] = max(p.bins[i], keep)
+            let away: Float = x < mid ? -1 : 1
+            // What doesn't fit on the Dock is thrown off, outwards; a deep drift also puffs a little powder.
+            if h - keep > 1 && room > 0 && i % 2 == 0 {
+                let size = max(2.5, min(9, (h - keep) * 0.3))
+                debris.append(Debris(x: x, y: keep + 4, vx: away * Float.random(in: 40...160), vy: Float.random(in: 80...220),
+                                     size: size, alpha: 1, lands: true))
+                room -= 1
+            }
+            if h > 4 && room > 0 && Float.random(in: 0...1) < 0.25 {
+                debris.append(Debris(x: x, y: keep, vx: away * Float.random(in: 0...60) + Float.random(in: -30...30),
+                                     vy: Float.random(in: 30...120), size: Float.random(in: 1.5...3.5), alpha: 0.85,
+                                     lands: false, fade: 0.9))
+                room -= 1
+            }
+        }
+        g.dirty = true
         p.dirty = true
     }
 
@@ -1284,6 +1613,7 @@ final class Simulation {
             }
             guard moved > 0.01 else { continue }
             p.dirty = true
+            shoveled = true                   // [1.3 welcome]
             if dirX != 0 {
                 // Plough: the snow piles up just ahead of the shovel; off the end it falls.
                 let ahead = c + Int(dirX) * (reach + 2)
@@ -1305,20 +1635,53 @@ final class Simulation {
 
     /// The Christmas tree stands on the ground next to the Dock (left side if there is room).
     private func syncTree() {
-        guard cfg.christmas, cfg.christmasTree else { treePos = nil; return }
         let s = Float(cfg.treeSize)
         var x: Float
-        if let d = dockLocal, d.minY < size.height / 2 {
+        if let d = layoutDock, d.minY < size.height / 2 {
             let a = avoidLocal ?? d
             let margin: Float = dockGuessed ? 30 : 0
-            x = Float(a.minX) - 62 * s - margin
-            if x < 50 * s { x = Float(a.maxX) + 62 * s + margin }
+            // [1.3 tree] Left of the Dock when the tree, its presents and the sign all fit there, else right of it
+            // (past any snowmen lined up on the ground there, e.g. by a Dock on the left), else wherever the
+            // tree alone fits.
+            let left = Float(a.minX) - 62 * s - margin
+            var right = Float(a.maxX) + 62 * s + margin
+            if cfg.snowman {
+                let sz = Float(cfg.snowmanSize)
+                for i in 0..<max(1, min(6, Int(cfg.snowmanCount.rounded()))) {
+                    let sl = slot(i, size: sz)
+                    if sl.key == Self.groundKey { right = max(right, sl.x + 34 * sz + 50 * s) }
+                }
+            }
+            let extra = 140 * s
+            if left - extra >= 20 { x = left }
+            else if right + extra <= W - 20 { x = right }
+            else if left >= 50 * s { x = left }
+            else { x = right }
         } else {
             x = W * 0.12
         }
         x = max(50 * s, min(W - 50 * s, x))
-        let y = driftHeight(Self.groundKey, at: x) * 0.8
+        // [1.3 holidays] the sign and the presents go on the side away from the Dock (if there is room)
+        var side: Float = layoutDock.map { x < Float($0.midX) ? -1 : 1 } ?? -1
+        if x + side * 135 * s < 20 || x + side * 135 * s > W - 20 {
+            // Flip only if the sign would not land on the Dock there; otherwise it stays outside, squeezed
+            // against the screen edge (see buildHolidays).
+            let other = x - side * 122 * s
+            let onDock = layoutDock.map { d -> Bool in
+                let a = avoidLocal ?? d
+                return other + 34 * s > Float(a.minX) && other - 34 * s < Float(a.maxX) && a.minY < size.height / 2
+            } ?? false
+            if !onDock { side = -side }
+        }
+        holidaySpot = (x, side)
+        guard cfg.christmas, cfg.christmasTree else { treePos = nil; return }
+        // [1.3 tree] whole points only, so the cached tree is not rebuilt for every flake that lands
+        let drift = driftHeight(Self.groundKey, at: x)
+        let y = (drift * 0.8).rounded()
         treePos = (x, y)
+        // [1.3 tree] the branches carry more snow as the drift around the tree grows (and less as it thaws)
+        let full = Float(min(28, max(6, cfg.groundDepth * 0.8)))
+        treeSnow = (min(1, drift / full) * 4).rounded() / 4
         let r = Christmas.treeRect(x: x, baseY: y, scale: s).insetBy(dx: 12, dy: 6)
         treeGhost = cfg.snowmanGhost && windowRects.contains { $0.rect.intersects(r) }
         treeHidden = localOcc.contains { $0.intersects(r) }
@@ -1327,13 +1690,19 @@ final class Simulation {
     /// Default spot for snowman i: along the top of the Dock from the right, then beside the Dock.
     private func slot(_ i: Int, size sz: Float) -> (key: Int, x: Float, y: Float) {
         let gap = 64 * sz
-        if let d = dockLocal, d.minY < size.height / 2, dockGuessed {
+        if dockTransient, let d = dockRest {
+            // An auto-hiding Dock: line up on the ground to the right of where it shows up (the tree is on
+            // the left), so the Dock never comes up through a snowman.
+            let gx = Float(d.maxX) + 40 * sz + Float(i) * gap
+            return (Self.groundKey, min(W - 20 * sz, gx), 0)
+        }
+        if let d = layoutDock, d.minY < size.height / 2, dockGuessed {
             // Only a guess of where the Dock is: keep every snowman on top of its middle part.
-            let count = Float(max(1, snowmen.count))
+            let count = Float(max(1, autoSnowmen))
             let row = min(gap, Float(d.width) * 0.75 / count)
             return (Self.dockKey, Float(d.midX) + (count - 1) * row * 0.5 - Float(i) * row, Float(d.maxY))
         }
-        if let d = dockLocal, d.minY < size.height / 2 {
+        if let d = layoutDock, d.minY < size.height / 2 {
             let x = Float(d.maxX) - 46 * sz - Float(i) * gap
             if x > Float(d.minX) + 20 * sz { return (Self.dockKey, x, Float(d.maxY)) }
             // No more room on the Dock: line up on the ground to the right of it (the tree is on the left).
@@ -1343,7 +1712,7 @@ final class Simulation {
             return (Self.groundKey, min(W - 20 * sz, gx), 0)
         }
         // The Dock is on the side, hidden or unknown: stand on the bottom drift, spread around the middle.
-        let count = Float(max(1, snowmen.count))
+        let count = Float(max(1, autoSnowmen))
         let row = min(gap * 0.8, W * 0.4 / count)
         let x = W * 0.5 + (count - 1) * row * 0.5 - Float(i) * row
         return (Self.groundKey, x, 0)
@@ -1357,7 +1726,8 @@ final class Simulation {
     }
 
     /// Highest visible surface at x whose top is at or below y.
-    private func surfaceBelow(x: Float, y: Float) -> (key: Int, top: Float) {
+    /// `liveDock`: include an auto-hiding Dock while it is shown (visitors); snowmen and hats never stay on it.
+    private func surfaceBelow(x: Float, y: Float, liveDock: Bool = false) -> (key: Int, top: Float) {
         var best: (Int, Float) = (Self.groundKey, 0)
         for (idx, w) in windowRects.enumerated() {
             let r = w.rect
@@ -1367,7 +1737,7 @@ final class Simulation {
             if windowRects[..<idx].contains(where: { $0.rect.contains(pt) }) { continue }
             best = (w.key, Float(r.maxY))
         }
-        if let d = dockLocal, x >= Float(d.minX), x <= Float(d.maxX), Float(d.maxY) <= y + 1, Float(d.maxY) > best.1 {
+        if !dockTransient || liveDock, let d = dockLocal, x >= Float(d.minX), x <= Float(d.maxX), Float(d.maxY) <= y + 1, Float(d.maxY) > best.1 {
             best = (Self.dockKey, Float(d.maxY))
         }
         return best
@@ -1375,19 +1745,24 @@ final class Simulation {
 
     private func syncSnowmen() {
         let want = cfg.snowman ? max(1, min(6, Int(cfg.snowmanCount.rounded()))) : 0
-        while snowmen.count < want {
+        // [1.3 snowmen] The automatic snowmen come first in `snowmen`, the ones the user rolled after them.
+        var autos = autoSnowmen
+        while autos < want {
             var s = Snowman()
-            s.nextBuild = snowmen.isEmpty ? 12 : Float(4 + snowmen.count * 5)
-            snowmen.append(s)
+            s.id = newSnowmanID()
+            s.nextBuild = autos == 0 ? 12 : Float(4 + autos * 5)
+            snowmen.insert(s, at: autos)
+            autos += 1
         }
-        while snowmen.count > want {
-            var s = snowmen.removeLast()
+        while autos > want {
+            var s = snowmen.remove(at: autos - 1)
             s.dismantle(into: &debris)
+            autos -= 1
         }
         let sz = Float(cfg.snowmanSize)
         for i in snowmen.indices {
             var s = snowmen[i]
-            s.sizeScale = sz
+            if !s.userBuilt { s.sizeScale = sz }
             if s.carried || s.falling { snowmen[i] = s; continue }
             if !s.userPlaced {
                 let sl = slot(i, size: sz)
@@ -1395,6 +1770,13 @@ final class Simulation {
                 s.anchorX = sl.x
                 s.baseY = sl.y + driftHeight(sl.key, at: sl.x) * 0.85
                 s.hostRect = surfaceRect(sl.key)
+            } else if dockTransient, s.hostKey == Self.dockKey, let r = dockLocal, let old = s.hostRect,
+                      abs(r.minX - old.minX) < 0.5, r.maxY > old.maxY + 0.5,
+                      s.offsetX >= 0, s.offsetX <= Float(r.width) {
+                // An auto-hiding Dock sliding up carries the snowman on it (sliding down, it falls off).
+                s.hostRect = r
+                s.anchorX = Float(r.minX) + s.offsetX
+                s.baseY = Float(r.maxY) + driftHeight(s.hostKey, at: s.anchorX) * 0.85
             } else if let r = surfaceRect(s.hostKey), let old = s.hostRect,
                       abs(r.minX - old.minX) < 0.5, abs(r.maxY - old.maxY) < 0.5,
                       s.offsetX >= 0, s.offsetX <= Float(r.width) - 6 {
@@ -1427,6 +1809,7 @@ final class Simulation {
     private func stepSnowmen(dt: Float) {
         guard cfg.snowman else {
             for i in snowmen.indices where snowmen[i].phase != .absent { snowmen[i].dismantle(into: &debris) }
+            snowmen.removeAll { $0.retired }                // [1.3 snowmen]
             return
         }
         if cfg.paused || fullscreen {
@@ -1440,15 +1823,40 @@ final class Simulation {
             snowmen[i].throwEvery = Float(cfg.throwEvery)
             snowmen[i].temperature = Float(cfg.temperature)
             snowmen[i].santaHat = cfg.christmas && cfg.christmasHats
+            snowmen[i].seasonalHat = seasonalHat            // [1.3 snowmen]
+            snowmen[i].sparkler = sparklers
+            snowmen[i].holdsKeepsake = cfg.christmas && cfg.christmasDecor   // [1.3 decor]
+            snowmen[i].outfits = cfg.snowmanOutfits
             if snowmen[i].falling { stepFall(i, dt: dt) }
+            if let h = snowmen[i].flyingHat, !h.lying {
+                // A hat knocked off lands on whatever is below it (the Dock, a window, the bottom).
+                let below = surfaceBelow(x: h.x, y: h.y)
+                snowmen[i].flyingHat?.rest = below.top + driftHeight(below.key, at: h.x) * 0.85 + 1
+            }
             let wantsThrow = snowmen[i].step(dt: dt, debris: &debris, shards: &shards)
-            if wantsThrow && cfg.snowballs && !snowmen[i].ghost { throwSnowball(from: i) }
+            if wantsThrow && cfg.snowballs && !snowmen[i].ghost {
+                // [1.3 snowmen] with two or more snowmen, some throws go at each other
+                if Float.random(in: 0...1) < 0.4, let v = fightTarget(for: i) { throwSnowball(from: i, atSnowman: v) }
+                else { throwSnowball(from: i) }
+            }
+            if let target = snowmen[i].takeRetort(), cfg.snowballs, !snowmen[i].ghost {
+                if target >= 0, let t = snowmanIndex(target), snowmen[t].phase == .standing {
+                    throwSnowball(from: i, atSnowman: t)
+                } else if target < 0, let m = mouseLocal {
+                    throwSnowball(from: i, toward: m)
+                }
+            }
+        }
+        // [1.3 snowmen] rolled snowmen that melted away – once their loose balls, carrot and hat have landed, and
+        // never while one is being dragged (indices must not shift under the mouse).
+        if !snowmen.contains(where: { $0.carried }) {
+            snowmen.removeAll { $0.retired && $0.loose.isEmpty && $0.carrot == nil && $0.flyingHat == nil }
         }
     }
 
     private func stepFall(_ i: Int, dt: Float) {
         var s = snowmen[i]
-        let target = surfaceBelow(x: s.anchorX, y: s.baseY)
+        let target = surfaceBelow(x: s.anchorX, y: s.baseY, liveDock: true)   // a shown auto-hiding Dock holds it too
         s.vy -= Self.gravity * dt
         s.baseY += s.vy * dt
         if s.baseY <= target.top {
@@ -1485,15 +1893,22 @@ final class Simulation {
         snowmen[i].armThrow = 1
     }
 
-    func snowmanClicked(_ i: Int, at p: CGPoint) {
-        guard hostsSnowman, snowmen.indices.contains(i) else { return }
+    /// Index of the snowman with this id.
+    func snowmanIndex(_ id: Int) -> Int? { snowmen.firstIndex { $0.id == id } }
+
+    private func newSnowmanID() -> Int { nextSnowmanID += 1; return nextSnowmanID }
+    private var nextSnowmanID = 0
+
+    func snowmanClicked(id: Int, at p: CGPoint) {
+        guard hostsSnowman, let i = snowmanIndex(id) else { return }
+        if SnowYard.optionDown { throwAtSnowman(i, at: p); return }      // [1.3 snowmen] ⌥-click = throw a snowball
         let fightBack = snowmen[i].hit(at: SIMD2(Float(p.x), Float(p.y)), debris: &debris)
         if fightBack && cfg.snowballs { throwSnowball(from: i) }
     }
 
     /// Drag a snowman with the mouse (`p` = cursor in local coordinates).
-    func dragSnowman(_ i: Int, to p: CGPoint) {
-        guard snowmen.indices.contains(i), snowmen[i].bodyRect != nil else { return }
+    func dragSnowman(id: Int, to p: CGPoint) {
+        guard let i = snowmanIndex(id), snowmen[i].bodyRect != nil else { return }
         snowmen[i].carried = true
         snowmen[i].falling = false
         snowmen[i].anchorX = Float(p.x)
@@ -1502,19 +1917,21 @@ final class Simulation {
     }
 
     /// Let go: it falls onto whatever is below.
-    func dropSnowman(_ i: Int) {
-        guard snowmen.indices.contains(i), snowmen[i].carried else { return }
+    func dropSnowman(id: Int) {
+        guard let i = snowmanIndex(id), snowmen[i].carried else { return }
         snowmen[i].carried = false
         snowmen[i].falling = true
         snowmen[i].vy = 0
     }
 
-    var snowmanHitRects: [CGRect?] {
+    /// Click targets of the snowmen, keyed by their stable ids.
+    var snowmanTargets: [(id: Int, rect: CGRect?)] {
         guard hostsSnowman, !fullscreen else { return [] }
-        return snowmen.map { $0.hidden ? nil : $0.hitRect }
+        return snowmen.map { ($0.id, $0.hidden ? nil : $0.hitRect) }
     }
 
     func restartSnowmen() {
+        snowmen.removeAll { $0.userBuilt }                  // [1.3 snowmen]
         for i in snowmen.indices { snowmen[i].restart() }
     }
 
@@ -1525,8 +1942,151 @@ final class Simulation {
 
     /// Send all dragged snowmen back to the Dock.
     func resetSnowmen() {
-        for i in snowmen.indices { snowmen[i].userPlaced = false; snowmen[i].falling = false }
+        for i in snowmen.indices where !snowmen[i].userBuilt { snowmen[i].userPlaced = false; snowmen[i].falling = false }
         syncSnowmen()
+    }
+
+    // MARK: - [1.3 snowmen] Rolling snowmen, snowball fights
+
+    private var autoSnowmen: Int { snowmen.reduce(0) { $0 + ($1.userBuilt ? 0 : 1) } }
+
+    /// ⌥ held over a snowman: the cursor holds a snowball instead of the shovel.
+    private func aiming(at m: SIMD2<Float>) -> Bool {
+        guard hostsSnowman, cfg.snowman else { return false }
+        let pt = CGPoint(x: CGFloat(m.x), y: CGFloat(m.y))
+        return snowmen.contains { !$0.hidden && ($0.hitRect?.insetBy(dx: -4, dy: -4).contains(pt) ?? false) }
+    }
+
+    private func stepYard(dt: Float) {
+        guard hostsSnowman, cfg.snowman else {
+            if !yard.isEmpty { yard.crumbleAll(into: &debris) }
+            return
+        }
+        guard !cfg.paused, !fullscreen else { return }
+        let held = cfg.mouse && rollHeld > 0.2 ? mouseLocal : nil
+        var span: ClosedRange<Float>?
+        if plow.visible {
+            let a = plow.x - plow.facing * 46, b = plow.x + plow.facing * 58
+            span = min(a, b)...max(a, b)
+        }
+        let dock = dockLocal.flatMap { $0.minY < size.height / 2 ? $0 : nil }
+        let done = yard.step(
+            dt: dt, cursor: held, maxRadius: 20 * Float(cfg.snowmanSize), temperature: Float(cfg.temperature), plow: span,
+            debris: &debris,
+            surfaceAt: { m in
+                if let d = dock, let p = self.piles[Self.dockKey], m.x >= Float(d.minX), m.x <= Float(d.maxX),
+                   m.y >= Float(d.minY) - 4, m.y <= Float(d.maxY) + self.driftHeight(Self.dockKey, at: m.x) + 70 {
+                    return SnowYard.Surface(pile: p, top: Float(d.maxY))
+                }
+                guard let g = self.piles[Self.groundKey], m.y <= self.driftHeight(Self.groundKey, at: m.x) + 70 else { return nil }
+                return SnowYard.Surface(pile: g, top: 0)
+            },
+            surfaceFor: { key in
+                guard let p = self.piles[key] else { return nil }
+                return SnowYard.Surface(pile: p, top: key == Self.groundKey ? 0 : Float(p.rect.maxY))
+            },
+            height: { key, x in self.driftHeight(key, at: x) })
+        for st in done { addBuiltSnowman(st) }
+    }
+
+    /// Three stacked balls come alive. At most `SnowYard.maxBuilt` rolled snowmen stand at once – the oldest
+    /// one falls apart to make room.
+    private func addBuiltSnowman(_ st: SnowYard.Stack) {
+        let built = snowmen.indices.filter { snowmen[$0].userBuilt && snowmen[$0].phase == .standing }
+        if built.count >= SnowYard.maxBuilt, let oldest = built.first { snowmen[oldest].life = 0 }
+        var s = Snowman.built(radii: (st.balls[0], st.balls[1], st.balls[2]), x: st.x, baseY: st.baseY)
+        s.hostKey = st.key
+        s.hostRect = surfaceRect(st.key)
+        s.offsetX = st.x - Float(s.hostRect?.minX ?? 0)
+        s.userPlaced = true
+        s.throwEvery = Float(cfg.throwEvery)
+        s.temperature = Float(cfg.temperature)
+        s.id = newSnowmanID()
+        snowmen.append(s)
+    }
+
+    /// Another standing snowman within throwing range of snowman i.
+    private func fightTarget(for i: Int) -> Int? {
+        let me = snowmen[i]
+        return snowmen.indices.filter { j in
+            let o = snowmen[j]
+            return j != i && o.phase == .standing && !o.hidden && !o.ghost && !o.carried && !o.falling && o.levels == 3
+                && abs(o.anchorX - me.anchorX) > 30 && abs(o.anchorX - me.anchorX) < 700
+        }.randomElement()
+    }
+
+    /// Snowman i throws at snowman v's head (v may duck).
+    func throwSnowball(from i: Int, atSnowman v: Int) {
+        guard snowmen.indices.contains(i), snowmen.indices.contains(v), let head = snowmen[v].ball(snowmen[v].levels - 1)
+        else { return }
+        throwSnowball(from: i, toward: SIMD2(head.x, head.y), victim: snowmen[v].id)
+    }
+
+    /// Snowman i throws a snowball that lands at `p` (the cursor, another snowman).
+    private func throwSnowball(from i: Int, toward p: SIMD2<Float>, victim: Int = -1) {
+        guard snowmen.indices.contains(i) else { return }
+        let hand = snowmen[i].handPosition
+        let dist = hypot(p.x - hand.x, p.y - hand.y)
+        let T = max(0.5, min(1.4, dist / 420))
+        let vx = (p.x - hand.x) / T
+        let vy = (p.y - hand.y) / T + 0.5 * 600 * T
+        snowballs.append(Snowball(x: hand.x, y: hand.y, vx: vx, vy: vy, t: 0, duration: T, target: -999, tx: p.x,
+                                  victim: victim, thrower: snowmen[i].id))
+        snowmen[i].armThrow = 1
+        if victim >= 0, let v = snowmanIndex(victim) { snowmen[v].incoming(eta: T, chance: 0.35) }
+    }
+
+    /// ⌥-click: the user throws a snowball at snowman i. It comes in from the front – big, shrinking as it
+    /// flies away from you – and hits where you clicked (unless the snowman ducks in time).
+    func throwAtSnowman(_ i: Int, at point: CGPoint, duckChance: Float = 0.3) {
+        guard hostsSnowman, snowmen.indices.contains(i), snowmen[i].phase == .standing || snowmen[i].phase == .dressing
+        else { return }
+        let p = SIMD2(Float(point.x), Float(point.y))
+        let side: Float = p.x > W * 0.5 ? -1 : 1
+        let start = SIMD2(p.x + side * 120, p.y + 70)
+        let T: Float = 0.38
+        let vx = (p.x - start.x) / T, vy = (p.y - start.y) / T + 0.5 * 600 * T
+        snowballs.append(Snowball(x: start.x, y: start.y, vx: vx, vy: vy, t: 0, duration: T, target: -999, tx: p.x,
+                                  victim: snowmen[i].id, thrower: -1, size: 34, endSize: 8))
+        snowmen[i].incoming(eta: T, chance: duckChance)
+    }
+
+    /// A snowball aimed at a snowman arrives. Returns false when it missed (it ducked or moved) – the ball then
+    /// flies on and splats where it falls.
+    private func snowballLands(_ s: inout Snowball) -> Bool {
+        guard let v = snowmanIndex(s.victim), let body = snowmen[v].bodyRect, !snowmen[v].carried else { return true }
+        if body.insetBy(dx: 2, dy: -3).contains(CGPoint(x: CGFloat(s.x), y: CGFloat(s.y))) {
+            snowmen[v].hitBySnowball(at: SIMD2(s.x, s.y), dirX: s.vx >= 0 ? 1 : -1, debris: &debris)
+            if cfg.snowballs {
+                // It answers: the user gets one back at the cursor, another snowman at its head.
+                snowmen[v].scheduleRetort(at: s.thrower, chance: s.thrower == -1 ? 0.75 : 0.55)
+            }
+            return true
+        }
+        s.victim = -1
+        s.duration = s.t + 2.5
+        s.floor = snowmen[v].baseY + 2
+        return false
+    }
+
+    /// For the snapshot: a moment of a snowball fight.
+    func demoFight(t: inout Double, dt: Double) {
+        guard snowmen.count >= 3 else { return }
+        for i in snowmen.indices { snowmen[i].outfit.hat = [.topHat, .beanie, .bucket][i % 3] }
+        // Snowman 1 hits snowman 2: its hat flies.
+        if let h = snowmen[2].ball(2) {
+            snowmen[2].hitBySnowball(at: SIMD2(h.x, h.y), dirX: -1, debris: &debris, hatChance: 1)
+        }
+        for _ in 0..<9 { step(dt: dt, now: t); t += dt }
+        // You throw at snowman 0, snowman 2 throws at snowman 1, which ducks.
+        if let b = snowmen[0].ball(1) { throwAtSnowman(0, at: CGPoint(x: CGFloat(b.x), y: CGFloat(b.y)), duckChance: 0) }
+        snowmen[1].duckDelay = 0.02
+        throwSnowball(from: 2, atSnowman: 1)
+        for _ in 0..<7 { step(dt: dt, now: t); t += dt }
+    }
+
+    var yardSummary: String {
+        "stacks \(yard.stacks.map { $0.balls.map { Int($0) } }), built \(snowmen.filter { $0.userBuilt }.count)"
     }
 
     // MARK: - Santa
@@ -1560,6 +2120,221 @@ final class Simulation {
         santa = (sl.x < -260 || sl.x > W + 260) ? nil : sl
     }
 
+    // MARK: - Holidays [1.3 holidays]
+
+    /// Ground under the presents and the sign: the top of the snow at the bottom, as for the tree.
+    private func holidayGround(_ x: Float) -> Float { driftHeight(Self.groundKey, at: x) * 0.8 }
+    private var holidayParty = false
+
+    /// Calendar, party hats and sparklers, Santa's presents, fireworks (on the screen with the characters).
+    private func stepHolidays(_ dt: Float) {
+        holiday.refresh(Holidays.now())
+        guard hostsSnowman else { return }
+        holiday.tidyPresents()
+        let party = holiday.partyTime(newYear: cfg.newYear)
+        if party != holidayParty {                       // only on a change: a demo may set them too
+            holidayParty = party
+            seasonalHat = party ? .party : nil
+            sparklers = party
+        }
+        if fullscreen {
+            if holiday.isAlive { holiday.clearSky() }
+            return
+        }
+        if cfg.christmas, let sl = santa, let spot = holidaySpot {
+            holiday.santaOverhead(x: sl.x, y: sl.y, dir: sl.dir, dt: dt, treeX: spot.x, side: spot.side,
+                                  scale: Float(cfg.treeSize), ground: holidayGround)
+        }
+        holiday.step(dt: dt, W: W, H: H, auto: !cfg.paused, newYear: cfg.newYear, ground: holidayGround, debris: &debris)
+    }
+
+    /// Called from `sync` (also while the display link sleeps): true when the sign needs redrawing.
+    private func syncHolidays() -> Bool {
+        holiday.refresh(Holidays.now())
+        guard hostsSnowman, !fullscreen else { return false }
+        let sign = cfg.countdownSign ? holiday.sign(christmas: cfg.christmas, newYear: cfg.newYear) : nil
+        return sign != holiday.drawnSign
+    }
+
+    /// The settings' "Launch Fireworks Now": the big show with confetti and party hats, any day.
+    func launchFireworks() {
+        guard hostsSnowman, !fullscreen else { return }
+        holiday.startShow(seconds: 120, extras: true, party: true, W: W, H: H)
+    }
+
+    /// Advent candles, the Christmas Eve star and the midnight flash, read by `Christmas` while drawing.
+    private func prepareHolidayLights() {
+        let on = cfg.christmas && hostsSnowman
+        Christmas.advent = on ? holiday.info.advent : 0
+        Christmas.starBoost = on && holiday.info.christmasEve ? 1.8 : 1
+        Christmas.flash = hostsSnowman ? min(1, holiday.flash) : 0
+    }
+
+    /// Lights along the top edge of the frontmost window: the part not covered by windows in front of it
+    /// or by menus, and not over the window buttons. None for a window right under the menu bar (zoomed).
+    private func windowLightSpan() -> (left: Float, right: Float, top: Float, occluders: [CGRect])? {
+        guard let r = activeRect?.standardized, r.width > 160, r.height > 60 else { return nil }
+        let top = r.maxY
+        guard top < size.height - max(menuBarHeight, safeTop) - 8, top > 60 else { return nil }
+        let left = max(4, r.minX + 80), right = min(size.width - 4, r.maxX - 6)
+        guard right - left > 50 else { return nil }
+        var occ = localOcc
+        if let i = windowRects.firstIndex(where: { abs($0.rect.minX - r.minX) < 2 && abs($0.rect.maxY - r.maxY) < 2
+                                                  && abs($0.rect.width - r.width) < 2 }) {
+            occ += windowRects[..<i].map(\.rect)
+        }
+        return (Float(left), Float(right), Float(top), occ)
+    }
+
+    /// [1.3 lights] Where the decor wreath hangs on the front window (the same test as in `buildDecor`), so the
+    /// window lights leave a gap for it.
+    private func windowWreathX(_ span: (left: Float, right: Float, top: Float, occluders: [CGRect])) -> Float? {
+        guard decorOn, let r = activeRect?.standardized, r.width >= 300 else { return nil }
+        let rr: Float = 9, cx = Float(r.midX), cy = span.top - 5 - rr
+        let box = CGRect(x: CGFloat(cx - rr - 5), y: CGFloat(cy - rr - 5), width: CGFloat(2 * rr + 10),
+                         height: CGFloat(span.top - cy + rr + 6))
+        return span.occluders.contains(where: { $0.intersects(box) }) ? nil : cx
+    }
+
+    private func buildHolidays(into out: inout [Vertex], cached: Bool, style: Christmas.LightStyle) {
+        if cfg.christmas && cfg.windowLights, let span = windowLightSpan() {
+            let gap = windowWreathX(span)                                    // [1.3 lights]
+            let y = CGFloat(span.top - 7)
+            let hidden = { (x: Float) -> Bool in
+                span.occluders.contains { CGFloat(x) >= $0.minX && CGFloat(x) <= $0.maxX && y >= $0.minY && y <= $0.maxY }
+            }
+            if cached {
+                Christmas.garland(&out, cache: &windowLightCache, width: span.right, y: span.top, t: drawTime, style: style,
+                                  left: span.left, sag: 0.55, gap: gap, occluders: span.occluders, skip: hidden)
+            } else {
+                Christmas.garland(&out, width: span.right, y: span.top, t: drawTime, style: style, left: span.left,
+                                  sag: 0.55, gap: gap, skip: hidden)
+            }
+        }
+        guard hostsSnowman, let spot = holidaySpot else { return }
+        let s = Float(cfg.treeSize)
+        if !holiday.presents.isEmpty { holiday.buildPresents(into: &out, ground: holidayGround, alpha: treeGhost ? 0.22 : 1) }
+        let sign = cfg.countdownSign ? holiday.sign(christmas: cfg.christmas, newYear: cfg.newYear) : nil
+        if cached { holiday.drawnSign = sign }
+        guard let items = sign else { return }
+        let x = treePos != nil ? min(max(spot.x + spot.side * 122 * s, 32 * s + 4), W - 32 * s - 4) : spot.x
+        let ground = holidayGround(x)
+        let box = CGRect(x: CGFloat(x - 32 * s), y: CGFloat(ground), width: CGFloat(64 * s), height: CGFloat(36 * s))
+        guard !localOcc.contains(where: { $0.intersects(box) }) else { return }
+        let ghost = cfg.snowmanGhost && windowRects.contains { $0.rect.intersects(box.insetBy(dx: 6, dy: 4)) }
+        HolidayScene.buildSign(into: &out, items: items, x: x, ground: ground, scale: s, t: drawTime, alpha: ghost ? 0.22 : 1)
+    }
+
+    // MARK: - Christmas decorations [1.3 decor]
+
+    private var decorOn: Bool { cfg.christmas && cfg.christmasDecor }
+    private var goldenFlakesOn: Bool { cfg.christmas && cfg.goldenFlakes && !fullscreen }
+
+    /// Where the gingerbread house stands: on the other side of the Dock from the tree (past any snowmen
+    /// lined up on the ground), and which stretches of the bottom stay free of candy canes.
+    private func syncDecor() {
+        housePos = nil
+        decorBlocked = []
+        guard decorOn, let spot = holidaySpot else { return }
+        let s = Float(cfg.treeSize), ds = Float(cfg.decorSize)
+        let half = 30 * ds
+        var x: Float
+        if let d = layoutDock, d.minY < size.height / 2 {
+            let a = avoidLocal ?? d
+            let margin: Float = (dockGuessed ? 30 : 0) + 26
+            if spot.x < Float(d.midX) {
+                x = Float(a.maxX) + margin + half
+                if cfg.snowman {
+                    let sz = Float(cfg.snowmanSize)
+                    for i in 0..<max(1, min(6, Int(cfg.snowmanCount.rounded()))) {
+                        let sl = slot(i, size: sz)
+                        if sl.key == Self.groundKey { x = max(x, sl.x + 34 * sz + half) }
+                    }
+                }
+            } else {
+                x = Float(a.minX) - margin - half
+            }
+            decorBlocked.append(Float(a.minX) - 16...Float(a.maxX) + 16)
+        } else {
+            x = W - spot.x
+        }
+        // snowmen standing on the ground keep their spot free of candy canes and saplings
+        if cfg.snowman {
+            let sz = Float(cfg.snowmanSize)
+            for i in 0..<max(1, min(6, Int(cfg.snowmanCount.rounded()))) {
+                let sl = slot(i, size: sz)
+                if sl.key == Self.groundKey { decorBlocked.append(sl.x - 28 * sz...sl.x + 28 * sz) }
+            }
+        }
+        // the tree, the presents and the sign on the tree's side
+        let treeHalf = 56 * s
+        decorBlocked.append(spot.x - treeHalf...spot.x + treeHalf)
+        let far = spot.x + spot.side * 160 * s
+        decorBlocked.append(min(spot.x, far)...max(spot.x, far))
+        if x - half >= 4, x + half <= W - 4, !decorBlocked.contains(where: { $0.overlaps(x - half...x + half) }) {
+            let y = driftHeight(Self.groundKey, at: x) * 0.8
+            let r = ChristmasDecor.houseRect(x: x, baseY: y, scale: ds)
+            if !localOcc.contains(where: { $0.intersects(r) }) {
+                housePos = (x, y)
+                houseGhost = cfg.snowmanGhost && windowRects.contains { $0.rect.intersects(r.insetBy(dx: 8, dy: 6)) }
+                decorBlocked.append(x - half - 6...x + half + 6)
+            }
+        }
+    }
+
+    /// Candy canes and saplings stuck in the bottom snow, drawn before the drift so it buries their feet.
+    /// They sink in as the snow piles up, about two thirds of each one keep showing.
+    private func buildBuriedDecor(into out: inout [Vertex]) {
+        guard decorOn, let ground = piles[Self.groundKey] else { return }
+        let s = Float(cfg.decorSize) * 0.95
+        for it in decorItems {
+            let x = it.u * W, hw = ChristmasDecor.halfWidth(it, scale: s)
+            guard x - hw > 6, x + hw < W - 6, !decorBlocked.contains(where: { $0.overlaps(x - hw...x + hw) }) else { continue }
+            let b = Int(x / Self.binW)
+            guard ground.visible.indices.contains(b), ground.visible[b] else { continue }
+            let h = ChristmasDecor.height(it, scale: s)
+            let y = max(0, driftHeight(Self.groundKey, at: x) - 0.34 * h)
+            if localOcc.contains(where: { $0.contains(CGPoint(x: CGFloat(x), y: CGFloat(y + h * 0.7))) }) { continue }
+            let ghost = cfg.snowmanGhost && windowRects.contains {
+                $0.rect.intersects(CGRect(x: CGFloat(x - hw), y: CGFloat(y), width: CGFloat(2 * hw), height: CGFloat(h)))
+            }
+            ChristmasDecor.item(&out, it, x: x, baseY: y, scale: s, alpha: ghost ? 0.22 : 1)
+        }
+    }
+
+    /// The gingerbread house by the Dock and the wreath on the front window.
+    private func buildDecor(into out: inout [Vertex]) {
+        guard decorOn else { return }
+        if hostsSnowman, let p = housePos {
+            let info = holiday.info
+            let wreath = info.giftDays && !(info.day == 24 && info.hour < 16)
+            ChristmasDecor.house(&out, x: p.x, baseY: p.y, scale: Float(cfg.decorSize), t: drawTime, wind: wind,
+                                 wreath: wreath, alpha: houseGhost ? 0.22 : 1)
+        }
+        // A wreath in the middle of the front window's top edge (where it fits and nothing covers it).
+        if let span = windowLightSpan(), let r = activeRect?.standardized, r.width >= 300 {
+            let rr: Float = 8.5, cx = Float(r.midX), cy = span.top - 3.5 - rr      // hangs high: covers little of the title
+            let box = CGRect(x: CGFloat(cx - rr - 5), y: CGFloat(cy - rr - 5), width: CGFloat(2 * rr + 10),
+                             height: CGFloat(span.top - cy + rr + 6))
+            if !span.occluders.contains(where: { $0.intersects(box) }) {
+                ChristmasDecor.wreath(&out, cx: cx, cy: cy, r: rr, alpha: 1, hangFrom: span.top - 1)
+            }
+        }
+    }
+
+    /// A few flakes fall as golden stars (the same ones `buildParticles` leaves out).
+    private func buildGoldenFlakes(into out: inout [Vertex]) {
+        guard goldenFlakesOn else { return }
+        let calm = cfg.calmActive ? activeRect?.standardized : nil
+        var golden = 0
+        for f in flakes where ChristmasDecor.isGolden(f) {
+            if golden >= ChristmasDecor.maxGoldenFlakes { break }
+            golden += 1
+            let a = calm.map { $0.contains(CGPoint(x: CGFloat(f.x), y: CGFloat(f.y))) } == true ? f.alpha * 0.3 : f.alpha
+            ChristmasDecor.goldenFlake(&out, x: f.x, y: f.y, size: f.size, alpha: a, t: drawTime, phase: f.phase)
+        }
+    }
+
     // MARK: - Output for the renderer
 
     /// Animation clock for drawing – wrapped so Float stays precise after days of uptime.
@@ -1574,7 +2349,9 @@ final class Simulation {
         let cx0 = Float(calm?.minX ?? 0), cx1 = Float(calm?.maxX ?? 0)
         let cy0 = Float(calm?.minY ?? 0), cy1 = Float(calm?.maxY ?? 0)
         let fade: Float = fullscreen ? Float(cfg.fullscreenSnow) : 1
+        let goldOn = goldenFlakesOn; var golden = 0          // [1.3 decor] golden star flakes are drawn as mesh
         for f in flakes {
+            if goldOn && ChristmasDecor.isGolden(f) && golden < ChristmasDecor.maxGoldenFlakes { golden += 1; continue }
             var a = f.alpha * fade, sz = f.size
             if hasCalm, f.x >= cx0, f.x < cx1, f.y >= cy0, f.y < cy1 {
                 let edge = min(f.x - cx0, cx1 - f.x, f.y - cy0, cy1 - f.y)
@@ -1593,7 +2370,11 @@ final class Simulation {
             // Landing clumps are drawn solid; powder stays soft.
             out.append(Particle(x: d.x, y: d.y, size: d.lands && d.size > 2.4 ? -d.size : d.size, alpha: max(0, d.alpha) * fade))
         }
-        for s in snowballs { out.append(Particle(x: s.x, y: s.y, size: -7.5, alpha: 1)) }
+        for s in snowballs {
+            let sz = s.size + (s.endSize - s.size) * min(1, s.t / max(0.01, s.duration))
+            out.append(Particle(x: s.x, y: s.y, size: -sz, alpha: 1))
+        }
+        for d in blownPowder { out.append(Particle(x: d.x, y: d.y, size: d.size, alpha: max(0, d.alpha))) }   // [1.3 weather]
     }
 
     func buildMesh(into out: inout [Vertex]) { buildMesh(into: &out, cached: true) }
@@ -1610,6 +2391,8 @@ final class Simulation {
             return
         }
         if cfg.frost { buildFrost(into: &out) }
+        if hostsSnowman { holiday.buildSky(into: &out, t: drawTime) }        // [1.3 holidays] fireworks
+        if hostsSnowman { buildBuriedDecor(into: &out) }                    // [1.3 decor] behind the bottom drift
         for p in landables {
             if p.dirty || p.iceDirty { rebuildMesh(p) }
             out.append(contentsOf: p.mesh)
@@ -1619,6 +2402,7 @@ final class Simulation {
         let style = Christmas.LightStyle(rawValue: cfg.lightStyle) ?? .colorful
         Christmas.bulbScale = Float(cfg.lightSize)
         Christmas.glow = Float(cfg.lightGlow)
+        prepareHolidayLights()                                               // [1.3 holidays]
         let menuY = H - Float(menuBarHeight)
         if cfg.christmas && cfg.christmasGarland && menuBarHeight > 0 {
             if cached {
@@ -1631,19 +2415,33 @@ final class Simulation {
         if hostsSnowman, let p = treePos, !treeHidden {
             if cached {
                 Christmas.tree(&out, cache: &treeCache, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: drawTime,
-                               style: style, alpha: treeGhost ? 0.22 : 1)
+                               style: style, alpha: treeGhost ? 0.22 : 1, snow: treeSnow)
             } else {
                 Christmas.tree(&out, x: p.x, baseY: p.y, scale: Float(cfg.treeSize), t: drawTime, style: style,
-                               alpha: treeGhost ? 0.22 : 1)
+                               alpha: treeGhost ? 0.22 : 1, snow: treeSnow)
             }
         }
+        buildHolidays(into: &out, cached: cached, style: style)            // [1.3 holidays]
+        buildDecor(into: &out)                                             // [1.3 decor] house, window wreath
+        if hostsSnowman { yard.build(into: &out) }        // [1.3 snowmen] rolled balls
         if hostsSnowman { for s in snowmen where !s.hidden { s.build(into: &out) } }
         for s in skiers where !localOcc.contains(where: { $0.contains(CGPoint(x: CGFloat(s.x), y: CGFloat(s.y + 10))) }) {
             s.build(into: &out, t: drawTime)
         }
+        for p in penguins where !localOcc.contains(where: { $0.contains(CGPoint(x: CGFloat(p.x), y: CGFloat(p.y + 10))) }) {
+            p.build(into: &out, t: drawTime)        // [1.3 penguin]
+        }
+        for r in reindeer where !localOcc.contains(where: { $0.contains(CGPoint(x: CGFloat(r.x), y: CGFloat(r.y + 12))) }) {
+            r.build(into: &out, t: drawTime)        // [1.3 reindeer]
+        }
         if let sl = santa { Christmas.sleigh(&out, sl, t: drawTime) }
         if plow.visible { plow.build(into: &out, t: drawTime) }
-        if let m = shovelAt { Mesh.shovel(&out, at: m, digging: shovelDigging) }
+        if hostsSnowman { holiday.buildConfetti(into: &out) }               // [1.3 holidays]
+        buildGoldenFlakes(into: &out)                                       // [1.3 decor]
+        if let m = shovelAt {
+            if aiming(at: m) { SnowYard.aimBall(&out, at: m, t: drawTime) }      // [1.3 snowmen]
+            else { Mesh.shovel(&out, at: m, digging: shovelDigging) }
+        }
     }
 
     /// Is something (an open menu, a popover) covering the strip right under the menu bar at x?
@@ -1794,4 +2592,76 @@ final class Simulation {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+// MARK: - [1.3 weather] Living weather
+
+extension Simulation {
+    /// Eases the living weather's steady wind and gusts into `wind` (the app passes a new value a few times
+    /// a second) and, in gusts, blows a little powder off the drift crests – soft, short-lived and never
+    /// landing, at most ~400 grains, so it costs about as much as a few hundred more flakes.
+    private func stepWeather(dt: Float) {
+        let goal = Float(cfg.weatherWind)
+        weatherWind += (goal - weatherWind) * min(1, dt * 1.5)
+        if goal == 0 && abs(weatherWind) < 0.05 { weatherWind = 0 }
+        wind += weatherWind
+        if fullscreen {
+            if !blownPowder.isEmpty { blownPowder.removeAll() }
+            return
+        }
+        var i = 0
+        while i < blownPowder.count {
+            var d = blownPowder[i]
+            d.vx += (wind * 0.8 - d.vx) * min(1, 1.5 * dt)
+            d.vy -= 90 * dt
+            d.x += d.vx * dt
+            d.y += d.vy * dt
+            d.alpha -= d.fade * dt
+            if d.alpha <= 0 || d.y < -10 {
+                blownPowder.swapAt(i, blownPowder.count - 1)
+                blownPowder.removeLast()
+                continue
+            }
+            blownPowder[i] = d
+            i += 1
+        }
+        let amount = Float(cfg.weatherPowder)
+        guard amount > 0.05, !cfg.paused, abs(wind) > 25, !landables.isEmpty, dt > 0 else { return }
+        // Puffs per second grow with the gust and the screen width; each puff is a short plume of grains.
+        let expected = amount * 22 * W / 1000 * dt
+        var count = Int(expected)
+        if Float.random(in: 0..<1) < expected - Float(count) { count += 1 }
+        guard count > 0 else { return }
+        var total = 0
+        for p in landables { total += p.bins.count }
+        guard total > 0 else { return }
+        let dir = wind > 0 ? 1 : -1
+        for _ in 0..<count where blownPowder.count < 400 {
+            // A few tries for a bin on a crest: high enough, visible and not lower than its downwind neighbor.
+            for _ in 0..<4 {
+                var k = Int.random(in: 0..<total)
+                var pile: Pile?
+                for p in landables {
+                    if k < p.bins.count { pile = p; break }
+                    k -= p.bins.count
+                }
+                guard let p = pile, k > 0, k < p.bins.count - 1, p.visible[k] else { continue }
+                let limited = p.limit.count == p.bins.count
+                func h(_ b: Int) -> Float { limited ? min(p.bins[b], p.limit[b]) : p.bins[b] }
+                let top = h(k)
+                guard top > 2.5, top >= h(k + dir) - 0.1 else { continue }
+                let x0 = Float(p.rect.minX) + (Float(k) + 0.5) * Self.binW
+                let y0 = Float(p.rect.maxY) + top - 1
+                for _ in 0..<Int.random(in: 8...14) {
+                    let lag = Float.random(in: 0...1)          // grains further along the plume rise and thin out
+                    blownPowder.append(Debris(
+                        x: x0 + Float(dir) * lag * Float.random(in: 4...30), y: y0 + lag * Float.random(in: 0...9),
+                        vx: wind * Float.random(in: 0.5...0.7), vy: Float.random(in: 4...24),
+                        size: Float.random(in: 1.7...3.2), alpha: Float.random(in: 0.45...0.75) * (1 - 0.4 * lag),
+                        lands: false, fade: Float.random(in: 0.55...0.85)))
+                }
+                break
+            }
+        }
+    }
 }

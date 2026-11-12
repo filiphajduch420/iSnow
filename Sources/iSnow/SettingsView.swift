@@ -22,7 +22,7 @@ struct SettingsView: View {
             SnowTab(settings: settings).tabItem { Label("Snowfall", systemImage: "cloud.snow") }.tag(0)
             DriftTab(settings: settings, delegate: delegate).tabItem { Label("Drifts", systemImage: "mountain.2") }.tag(1)
             SnowmanTab(settings: settings, delegate: delegate).tabItem { Label("Snowman", systemImage: "figure.wave") }.tag(2)
-            ChristmasTab(settings: settings, delegate: delegate).tabItem { Label("Christmas", systemImage: "gift") }.tag(3)
+            ChristmasTab(settings: settings, delegate: delegate).tabItem { Label("Holidays", systemImage: "gift") }.tag(3)
             ExtrasTab(settings: settings, delegate: delegate).tabItem { Label("Other", systemImage: "sparkles") }.tag(4)
             AboutTab().tabItem { Label("About", systemImage: "info.circle") }.tag(5)
         }
@@ -114,6 +114,16 @@ private struct SnowTab: View {
                     Button("White") { settings.config.tint = [1, 1, 1] }
                         .disabled(settings.config.tint == [1, 1, 1])
                 }
+            }
+            // [1.3 weather]
+            Section("Living Weather") {
+                Toggle("Living weather", isOn: $settings.config.livingWeather)
+                if settings.config.livingWeather {
+                    ValueSlider(title: "Weather changes", value: $settings.config.weatherStrength,
+                                range: R.weatherStrength, format: times)
+                }
+                Text("Flurries, heavy snow, gusty wind, clear spells and cold snaps come and go over minutes. The sliders above set the average.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -225,6 +235,7 @@ private struct SnowmanTab: View {
                     $0 < 1 ? String(localized: "\(Int($0 * 60)) s") : String(localized: "\(Int($0.rounded())) min")
                 }
                 Toggle("Fade a snowman that covers a window", isOn: $settings.config.snowmanGhost)
+                Toggle("Dress snowmen in hats and colourful scarves", isOn: $settings.config.snowmanOutfits)   // [1.3 snowmen]
                 HStack {
                     Spacer()
                     Button("Back to the Dock") { delegate.resetSnowmen() }
@@ -232,6 +243,8 @@ private struct SnowmanTab: View {
                 }
                 Text("Drag a snowman with the mouse to put it on a window or anywhere else. If the window moves, it falls.")
                     .font(.callout).foregroundStyle(.secondary)
+                Text("Build your own: hold ⌥ Option + ⇧ Shift and move the cursor along the snow at the bottom to roll a ball. Roll a smaller ball into a bigger one to stack it – three balls make a snowman.")
+                    .font(.callout).foregroundStyle(.secondary)          // [1.3 snowmen]
             }
             .disabled(!settings.config.snowman)
             Section("Snowball fight") {
@@ -242,6 +255,8 @@ private struct SnowmanTab: View {
                 .disabled(!settings.config.snowballs)
                 Text("Click the snowman – every third hit knocks off a level. Sometimes it fights back.")
                     .font(.callout).foregroundStyle(.secondary)
+                Text("⌥-click a snowman to throw a snowball at it. It may duck, lose its hat or throw one back.")
+                    .font(.callout).foregroundStyle(.secondary)          // [1.3 snowmen]
             }
             .disabled(!settings.config.snowman)
             Section("Skiers") {
@@ -263,30 +278,67 @@ private struct SnowmanTab: View {
                 Text("They ski along the bottom of the screen, jump up onto the Dock, ride across it and jump off the other end.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            // [1.3 penguin]
+            Section("Visitors") {
+                Toggle("A penguin waddles along the bottom now and then", isOn: $settings.config.penguin)
+                ValueSlider(title: "Visits roughly every", value: $settings.config.penguinInterval,
+                            range: SimConfig.Ranges.penguinInterval, step: 1) {
+                    String(localized: "\(Int($0.rounded())) min")
+                }
+                .disabled(!settings.config.penguin)
+                HStack {
+                    Spacer()
+                    Button("Send a Penguin Now") { delegate.sendPenguin() }
+                }
+                Text("It belly-slides down the snow, hops over the Dock and waves to the snowman. It only comes at \(Temp.format(2, fahrenheit: settings.config.fahrenheit)) or colder.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
 }
 
+/// [1.3 holidays] The "Holidays" tab: Christmas and New Year's Eve.
 private struct ChristmasTab: View {
     @Bindable var settings: Settings
     let delegate: AppDelegate
 
     var body: some View {
         Form {
-            Section {
-                Toggle("Christmas mode", isOn: $settings.config.christmas)
+            Section("Christmas") {
+                Picker("Christmas mode", selection: Binding(get: { settings.config.christmasMode },
+                                                            set: { Holidays.setMode($0, in: &settings.config) })) {
+                    Text("Off").tag(Holidays.ChristmasMode.off.rawValue)
+                    Text("On").tag(Holidays.ChristmasMode.on.rawValue)
+                    Text("Automatic (1 Dec – 6 Jan)").tag(Holidays.ChristmasMode.automatic.rawValue)
+                }
+                if settings.config.christmasMode == Holidays.ChristmasMode.automatic.rawValue {
+                    Text(settings.config.christmas ? "On now, until 6 January." : "Turns on by itself on 1 December.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Toggle("Countdown sign by the tree", isOn: $settings.config.countdownSign)
+                Text("Days to Christmas Eve in Advent, the time to midnight on New Year's Eve.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
             Section("Decorations") {
                 Toggle("Christmas tree next to the Dock", isOn: $settings.config.christmasTree)
                 ValueSlider(title: "Tree size", value: $settings.config.treeSize, range: R.treeSize, format: times)
                     .disabled(!settings.config.christmasTree)
                 Toggle("String of lights under the menu bar", isOn: $settings.config.christmasGarland)
+                Toggle("Lights along the top of the front window", isOn: $settings.config.windowLights)
                 Toggle("Santa hats on snowmen", isOn: $settings.config.christmasHats)
+                Toggle("Christmas decorations", isOn: $settings.config.christmasDecor)          // [1.3 decor]
+                Text("A gingerbread house, candy canes, a wreath on the front window, little gifts for snowmen.")
+                    .font(.callout).foregroundStyle(.secondary)                                // [1.3 decor]
+                ValueSlider(title: "Decoration size", value: $settings.config.decorSize, range: R.treeSize, format: times)
+                    .disabled(!settings.config.christmasDecor)                                 // [1.3 decor]
+                Toggle("Golden star flakes", isOn: $settings.config.goldenFlakes)              // [1.3 decor]
                 Picker("Lights", selection: $settings.config.lightStyle) {
                     Text("Colorful, twinkling").tag(Christmas.LightStyle.colorful.rawValue)
                     Text("Warm white").tag(Christmas.LightStyle.warmWhite.rawValue)
                     Text("Chasing").tag(Christmas.LightStyle.chase.rawValue)
+                    Text("Pastel").tag(Christmas.LightStyle.pastel.rawValue)                  // [1.3 lights]
+                    Text("Icicle lights").tag(Christmas.LightStyle.icicle.rawValue)           // [1.3 lights]
                 }
                 ValueSlider(title: "Light size", value: $settings.config.lightSize, range: 0.5...2.5, format: times)
                 ValueSlider(title: "Brightness", value: $settings.config.lightGlow, range: 0...2.5) {
@@ -299,12 +351,39 @@ private struct ChristmasTab: View {
             .disabled(!settings.config.christmas)
             Section("Santa") {
                 Toggle("Santa flies by now and then", isOn: $settings.config.santa)
+                Text("From 24 to 26 December he drops presents by the tree.")
+                    .font(.callout).foregroundStyle(.secondary)
                 HStack {
                     Spacer()
                     Button("Send Santa Now") { delegate.launchSanta() }
                 }
             }
             .disabled(!settings.config.christmas)
+            // [1.3 reindeer]
+            Section("Reindeer") {
+                Toggle("A reindeer trots along the bottom now and then", isOn: $settings.config.reindeer)
+                ValueSlider(title: "Visits roughly every", value: $settings.config.reindeerInterval,
+                            range: SimConfig.Ranges.penguinInterval, step: 1) {
+                    String(localized: "\(Int($0.rounded())) min")
+                }
+                .disabled(!settings.config.reindeer)
+                HStack {
+                    Spacer()
+                    Button("Send a Reindeer Now") { delegate.sendReindeer() }
+                }
+                Text("It nibbles the snow, paws at the drifts, hops over the Dock – and has a soft spot for snowmen's carrot noses.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .disabled(!settings.config.christmas)
+            Section("New Year's Eve") {
+                Toggle("New Year's Eve", isOn: $settings.config.newYear)
+                Text("From noon on 31 December the sign counts down to midnight, rockets fly in the evening and snowmen wear party hats. At midnight: fireworks, confetti and flashing lights.")
+                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("Launch Fireworks Now") { delegate.launchFireworks() }
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -345,6 +424,7 @@ struct AboutTab: View {
                 LabeledContent("Source code") { Link("github.com/filiphajduch420/iSnow", destination: Self.repo) }
                 LabeledContent("Updates") { Link("Releases on GitHub", destination: Self.releases) }
             }
+            UpdateSection()                                                    // [1.3 updates]
             Section("Author") {
                 LabeledContent("Made by") { Text(verbatim: "Filip Hajduch") }
                 LabeledContent("Website") { Link("filiphajduch.dev", destination: Self.authorSite) }

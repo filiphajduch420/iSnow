@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 @MainActor
 enum Promo {
     /// What happens in the last seconds before the picture is taken.
-    enum Action { case none, skiers, plow, shovel, fullscreen }
+    enum Action { case none, skiers, plow, shovel, fullscreen, penguin, build, fight, fireworks, reindeer }   // [1.3 web] the 1.3 scenes
 
     struct Scene {
         let name: String
@@ -29,6 +29,10 @@ enum Promo {
         var treeSize = 1.3
         /// Close-ups saved instead of the whole screen: file name and region in points.
         var crops: [(String, CGRect)] = []
+        /// [1.3 web] The holiday clock when the scene's snowfall ends (local time, `Holidays.parse`); it also sets
+        /// the menu bar clock and the calendar widget. Nil: Thursday 24 December, 9:41, as the drawn menu bar says.
+        var date: String? = nil
+        var note = ""                  // the calendar widget's caption with a date
     }
 
     static let size = CGSize(width: 1440, height: 900)
@@ -51,6 +55,19 @@ enum Promo {
               treeSize: 1.9, crops: [("lights", CGRect(x: 0, y: 500, width: 640, height: 400)),
                                      ("tree", CGRect(x: 60, y: 0, width: 640, height: 400))]),
         Scene(name: "fullscreen", temperature: -8, seconds: 150, snowmen: 2, finalDensity: 3.2, action: .fullscreen),
+        // [1.3 web] The 1.3 features (close-ups are chosen where the action happens).
+        Scene(name: "penguin", temperature: -7, seconds: 140, snowmen: 2, action: .penguin),
+        Scene(name: "build", temperature: -6, seconds: 150, snowmen: 1, action: .build),
+        Scene(name: "fight", temperature: -6, seconds: 140, snowmen: 3, action: .fight),
+        Scene(name: "newyear", temperature: -5, seconds: 120, christmas: true, snowmen: 3, finalDensity: 1.0,
+              action: .fireworks, date: "2027-01-01T00:00:02", note: "New Year’s Day"),
+        Scene(name: "advent", temperature: -5, seconds: 120, christmas: true, snowmen: 2, treeSize: 1.6,
+              crops: [("advent", CGRect(origin: .zero, size: size)), ("advent-tree", CGRect(x: 0, y: 0, width: 640, height: 400))],
+              date: "2026-12-13T18:30:00", note: "Christmas market"),
+        Scene(name: "reindeer", temperature: -6, seconds: 120, christmas: true, snowmen: 2, action: .reindeer,
+              date: "2026-12-23T17:20:00", note: "Last presents"),
+        Scene(name: "christmas-eve", temperature: -5, seconds: 140, christmas: true, snowmen: 3, finalDensity: 1.2,
+              date: "2026-12-24T18:00:00", note: "Christmas Eve"),
     ]
 
     static func run(dir: String, delegate: AppDelegate) {
@@ -61,7 +78,14 @@ enum Promo {
             render(s, renderer: renderer, dir: dir)
             print("scene \(s.name)")
         }
-        if only == nil || only!.contains("settings") { renderSettings(dir: dir, delegate: delegate) } else { exit(0) }
+        Holidays.fixedNow = nil                     // [1.3 web] the scenes set the holiday clock
+        // [1.3 welcome] The welcome window only when asked for (ISNOW_PROMO_ONLY=welcome,welcome-new,welcome-lost).
+        // [1.3 web] A full run renders the first-launch window too.
+        let welcome = ["welcome", "welcome-new", "welcome-lost"].filter { only?.contains($0) ?? ($0 == "welcome") }
+        let settingsToo = only == nil || only!.contains("settings")
+        renderWelcome(dir: dir, names: welcome) {
+            if settingsToo { renderSettings(dir: dir, delegate: delegate) } else { exit(0) }
+        }
     }
 
     // MARK: Desktop scenes
@@ -93,14 +117,23 @@ enum Promo {
         cfg.treeSize = scene.treeSize
         cfg.santa = false              // no random visitors: the scene sends Santa, skiers or the plow itself
         cfg.skier = false
+        cfg.penguin = false            // [1.3 penguin]
         cfg.snowplow = false           // (sendPlow() still works)
         var wins = [TrackedWindow(id: 2, frame: terminal), TrackedWindow(id: 1, frame: notes)]
         var menuBars: [CGRect]? = nil
         let widgets = widgetRects.enumerated().map { TrackedWindow(id: 100 + $0.offset, frame: $0.element) }
         var t = 0.0
         let dt = 1.0 / 30
+        let finalTicks = 300
+        // [1.3 web] The holiday clock runs with the simulation and reaches `date` when the snowfall ends.
+        let clockEnd = scene.date.flatMap(Holidays.parse) ?? Holidays.parse("2026-12-24T09:41:00")!
+        let endT = ceil(scene.seconds / dt) * dt + Double(finalTicks + scene.dragFrames) * dt
+        // In Christmas mode the front window (the terminal) gets its lights.
+        let active: CGRect? = scene.christmas ? wins.first?.frame : nil
         func tick(mouse: CGPoint? = nil, shovel: Bool = false) {
-            sim.sync(windows: wins, occluders: [], dock: dock, icons: [], widgets: widgets, menuBars: menuBars, now: t, cfg: cfg)
+            Holidays.fixedNow = clockEnd.addingTimeInterval(t - endT)
+            sim.sync(windows: wins, occluders: [], dock: dock, icons: [], widgets: widgets, menuBars: menuBars,
+                     activeWindow: menuBars == [] ? nil : active, now: t, cfg: cfg)
             sim.step(dt: dt, now: t, mouse: mouse, shovel: shovel)
             t += dt
         }
@@ -109,7 +142,6 @@ enum Promo {
         cfg.density = scene.finalDensity
         cfg.maxFlakes = 1200
         sim.restartSnowmen()           // make sure no snowman is mid-melt in the picture
-        let finalTicks = 300
         for i in 0..<finalTicks {
             // Santa flies at about 190 pt/s from just off screen: 2.7 s before the end he is well inside.
             if scene.santa && i == finalTicks - 80 { sim.launchSanta() }
@@ -190,13 +222,111 @@ enum Promo {
             fullscreen = true
             for _ in 0..<90 { tick() }
             frame = capture(sim)
+        // [1.3 web] The 1.3 scenes.
+        case .penguin:
+            // Send penguins until one brings its chick (about one in five does), then keep the moment both are
+            // well inside a close-up – best while one of them slides or waves.
+            for attempt in 1...30 {
+                _ = sim.sendPenguin()
+                for _ in 0..<(3 * 30) { tick() }
+                if sim.penguinSpots.count >= 2 { print("penguin: chick on try \(attempt)"); break }
+                var n = 0
+                while !sim.penguinSpots.isEmpty && n < 150 * 30 { tick(); n += 1 }
+            }
+            frame = capture(sim)
+            var best = -1.0
+            var region = CGRect(x: 0, y: 0, width: 640, height: 400)
+            for _ in 0..<(26 * 30) {
+                tick()
+                let spots = sim.penguinSpots.map { $0.split(separator: " ").map(String.init) }
+                let xs = spots.compactMap { $0.first.flatMap(Double.init) }
+                guard xs.count >= 2, let lo = xs.min(), let hi = xs.max(), lo > 60, hi < Double(size.width) - 60,
+                      hi - lo > 26, hi - lo < 200 else { continue }
+                let lively = spots.contains { ["slide", "wave", "air"].contains($0.last ?? "") }
+                let score = Double(xs.count) + (lively ? 1 : 0) - abs(hi - lo - 60) / 1000
+                if score > best {
+                    best = score
+                    frame = capture(sim)
+                    let x = min(max(0, (lo + hi) / 2 - 256), Double(size.width) - 512)
+                    region = CGRect(x: x, y: 0, width: 512, height: 320)
+                }
+            }
+            print("penguin: score \(best)")
+            crops = [("penguin", region)]
+        case .build:
+            // ⌥⇧ + sweep along the bottom: a big ball, a middle one rolled into it and a head make a snowman left
+            // of the Dock (as in SnowmenDemo); then a second ball is half rolled along the Dock, keys still held.
+            func roll(_ x0: CGFloat, _ x1: CGFloat, y: CGFloat = 14, speed: CGFloat = 260, release: Bool = true) {
+                sim.rollKeys = true
+                for _ in 0..<6 { tick(mouse: CGPoint(x: x0, y: y), shovel: true) }
+                let n = max(1, Int(abs(x1 - x0) / speed / CGFloat(dt)))
+                for k in 1...n { tick(mouse: CGPoint(x: x0 + (x1 - x0) * CGFloat(k) / CGFloat(n), y: y), shovel: true) }
+                if release { sim.rollKeys = false; for _ in 0..<2 { tick(mouse: CGPoint(x: x1, y: y)) } }
+            }
+            roll(300, 120)
+            roll(10, 75, release: false)
+            roll(75, 100, speed: 120)
+            for _ in 0..<30 { tick() }
+            roll(30, 55, release: false)
+            roll(55, 100, speed: 120)
+            for _ in 0..<72 { tick() }
+            let y = dock.maxY + 6
+            roll(600, 450, y: y, speed: 160, release: false)
+            print("build: \(sim.yardSummary)")
+            cursor = CGPoint(x: 450, y: y)
+            frame = capture(sim)
+            sim.rollKeys = false
+            crops = [("build", CGRect(x: 0, y: 0, width: 640, height: 400))]
+        case .fight:
+            // Snowman 1 knocks snowman 2's hat off, you throw at snowman 0, snowman 2 throws at snowman 1.
+            sim.demoFight(t: &t, dt: dt)
+            frame = capture(sim)
+            let xs = sim.snowmen.map { CGFloat($0.anchorX) }
+            if let lo = xs.min(), let hi = xs.max() {
+                let w = min(size.width, max(640, hi - lo + 300)), x = min(max(0, (lo + hi) / 2 - w / 2), size.width - w)
+                crops = [("fight", CGRect(x: x, y: 0, width: w, height: (w * 0.625).rounded()))]
+            }
+        case .fireworks:
+            // Just after midnight: the frame with the most fireworks in the sky in the next 12 seconds.
+            frame = capture(sim)
+            var best = -1
+            for _ in 0..<(12 * 30) {
+                tick()
+                let f = capture(sim)
+                let sky = f.mesh.reduce(0) { $0 + ($1.y > 380 && $1.y < Float(size.height) - 70 ? 1 : 0) }
+                if sky > best { best = sky; frame = f }
+            }
+            print("fireworks: \(best) vertices in the sky")
+        case .reindeer:
+            // Send a reindeer and keep the liveliest moment with all of it well inside a close-up – best while
+            // it rears up for a carrot, then pawing or grazing, then trotting.
+            _ = sim.sendReindeer()
+            frame = capture(sim)
+            var best = -1.0
+            var region = CGRect(x: 0, y: 0, width: 512, height: 320)
+            for _ in 0..<(40 * 30) {
+                tick()
+                guard let spot = sim.reindeerSpots.first?.split(separator: " ").map(String.init),
+                      let x = spot.first.flatMap(Double.init), x > 90, x < Double(size.width) - 90 else { continue }
+                let act = spot.last ?? ""
+                let score = ["reach": 4.0, "chew": 3.0, "paw": 2.5, "graze": 2.0, "air": 2.0, "look": 1.5][act] ?? 1.0
+                if score > best {
+                    best = score
+                    frame = capture(sim)
+                    region = CGRect(x: min(max(0, x - 256), Double(size.width) - 512), y: 0, width: 512, height: 320)
+                }
+            }
+            print("reindeer: score \(best)")
+            crops = [("reindeer", region)]
         }
 
+        let shownDate = scene.date.flatMap(Holidays.parse)     // [1.3 web] menu bar clock and calendar widget
         guard let img = image(frame, renderer: renderer, scale: 2, background: { ctx in
             if fullscreen {
                 drawVideoApp(ctx)
             } else {
-                drawDesktop(ctx, windows: wins, christmas: scene.christmas, temperature: scene.temperature)
+                drawDesktop(ctx, windows: wins, christmas: scene.christmas, temperature: scene.temperature,
+                            date: shownDate, note: scene.note)
             }
         }, foreground: { ctx in
             if let c = cursor { drawCursor(ctx, at: c) }
@@ -340,7 +470,8 @@ enum Promo {
 
     // MARK: The desktop
 
-    static func drawDesktop(_ ctx: CGContext, windows: [TrackedWindow], christmas: Bool, temperature: Double) {
+    static func drawDesktop(_ ctx: CGContext, windows: [TrackedWindow], christmas: Bool, temperature: Double,
+                            date: Date? = nil, note: String = "") {
         let nsctx = NSGraphicsContext(cgContext: ctx, flipped: false)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = nsctx
@@ -372,12 +503,12 @@ enum Promo {
         ridge(230, 70, 3.1, rgb(0.15, 0.25, 0.48, 0.92))
         ridge(140, 45, 5.0, rgb(0.10, 0.18, 0.38, 1))
 
-        drawWidgets(ctx, christmas: christmas, temperature: temperature)
+        drawWidgets(ctx, christmas: christmas, temperature: temperature, date: date, note: note)
         for w in windows.reversed() {
             if w.id == 1 { drawNotes(ctx, w.frame) } else { drawTerminal(ctx, w.frame) }
         }
         drawDock(ctx)
-        drawMenuBar(ctx)
+        drawMenuBar(ctx, date: date)
     }
 
     static func windowChrome(_ ctx: CGContext, _ r: CGRect, dark: Bool, title: String) {
@@ -405,7 +536,7 @@ enum Promo {
         text("Winter plans ❄︎", CGPoint(x: r.minX + 36, y: y), size: 26, weight: .bold, color: NSColor(white: 0.1, alpha: 1))
         y -= 46
         let lines = ["Make hot chocolate", "Build a snowman on the Dock", "Drag a window and watch the drift slide off",
-                     "Hold ⌥ and shovel the bottom of the screen", "Turn on Christmas mode on December 1st",
+                     "Hold ⌥ and shovel the bottom of the screen", "Watch Christmas arrive on December 1st",
                      "Set the temperature to −20 °C for real icicles"]
         for (i, l) in lines.enumerated() {
             let done = i < 2
@@ -439,7 +570,7 @@ enum Promo {
         }
     }
 
-    static func drawWidgets(_ ctx: CGContext, christmas: Bool, temperature: Double) {
+    static func drawWidgets(_ ctx: CGContext, christmas: Bool, temperature: Double, date: Date? = nil, note: String = "") {
         for (i, r) in widgetRects.enumerated() {
             ctx.saveGState()
             ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 18, color: rgb(0, 0, 0, 0.3))
@@ -458,11 +589,14 @@ enum Promo {
                 symbol("cloud.snow.fill", in: CGRect(x: r.minX + 16, y: r.minY + 34, width: 26, height: 22), color: .white)
                 text("Heavy snow", CGPoint(x: r.minX + 16, y: r.minY + 12), size: 13, weight: .medium, color: .white)
             } else {
-                text(christmas ? "THURSDAY" : "MONDAY", CGPoint(x: r.minX + 16, y: r.maxY - 32), size: 12, weight: .bold,
+                // [1.3 web] A scene with a date shows that day.
+                let day = date.map { (stamp($0, "EEEE").uppercased(), stamp($0, "d"), note) }
+                    ?? (christmas ? ("THURSDAY", "24", "Christmas Eve") : ("MONDAY", "7", "Ski trip"))
+                text(day.0, CGPoint(x: r.minX + 16, y: r.maxY - 32), size: 12, weight: .bold,
                      color: NSColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 1))
-                text(christmas ? "24" : "7", CGPoint(x: r.minX + 14, y: r.maxY - 92), size: 54, weight: .light,
+                text(day.1, CGPoint(x: r.minX + 14, y: r.maxY - 92), size: 54, weight: .light,
                      color: NSColor(white: 0.1, alpha: 1))
-                text(christmas ? "Christmas Eve" : "Ski trip", CGPoint(x: r.minX + 16, y: r.minY + 14), size: 13,
+                text(day.2, CGPoint(x: r.minX + 16, y: r.minY + 14), size: 13,
                      weight: .medium, color: NSColor(white: 0.3, alpha: 1))
             }
         }
@@ -507,7 +641,7 @@ enum Promo {
         }
     }
 
-    static func drawMenuBar(_ ctx: CGContext) {
+    static func drawMenuBar(_ ctx: CGContext, date: Date? = nil) {
         let bar = CGRect(x: 0, y: size.height - menuH, width: size.width, height: menuH)
         ctx.setFillColor(rgb(0.02, 0.05, 0.15, 0.35))
         ctx.fill(bar)
@@ -521,7 +655,16 @@ enum Promo {
         symbol("snowflake", in: CGRect(x: 1186, y: bar.minY + 8, width: 16, height: 16), color: .white)
         symbol("wifi", in: CGRect(x: 1216, y: bar.minY + 8, width: 18, height: 15), color: .white)
         symbol("battery.75percent", in: CGRect(x: 1246, y: bar.minY + 8, width: 26, height: 14), color: .white)
-        text("Thu 24 Dec  9:41", CGPoint(x: 1290, y: y), size: 13.5, weight: .medium, color: .white)
+        text(date.map { stamp($0, "EEE d MMM  H:mm") } ?? "Thu 24 Dec  9:41", CGPoint(x: 1290, y: y), size: 13.5,
+             weight: .medium, color: .white)
+    }
+
+    /// [1.3 web] A date in English, e.g. "Thu 24 Dec  9:41".
+    static func stamp(_ d: Date, _ format: String) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_GB")
+        f.dateFormat = format
+        return f.string(from: d)
     }
 
     /// A video player in full screen: a mountain sunset with the playback controls.

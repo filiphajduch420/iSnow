@@ -10,22 +10,22 @@ goes straight through the snow.
 
 ![iSnow – snow drifts on windows, icicles and snowmen on the Dock](media/hero.png)
 
-**Current version: 1.2** · macOS 14 Sonoma or later · Apple silicon and Intel · about 1 MB · [MIT License](LICENSE)
+**Current version: 1.3** · macOS 14 Sonoma or later · Apple silicon and Intel · about 4 MB · [MIT License](LICENSE)
 
 ## Install
 
 ### Download (recommended)
 
-1. Download **`iSnow-v1.2.dmg`** (and `iSnow-v1.2.dmg.sha256`) from the
+1. Download **`iSnow-v1.3.dmg`** (and `iSnow-v1.3.dmg.sha256`) from the
    [Releases](https://github.com/filiphajduch420/iSnow/releases/latest) page.
 2. Verify the download – with both files in the same folder, run:
    ```sh
-   shasum -a 256 -c iSnow-v1.2.dmg.sha256
+   shasum -a 256 -c iSnow-v1.3.dmg.sha256
    ```
-   It should print `iSnow-v1.2.dmg: OK`. The SHA-256 of `iSnow-v1.2.dmg` is:
+   It should print `iSnow-v1.3.dmg: OK`. The SHA-256 of `iSnow-v1.3.dmg` is:
    <!-- sha256 -->
    ```
-   0ad7c0d6d77da8cfbb1d57af1599827fb60853f614582f719a26854494ff474a
+   d54308320807becee593748cb0d9a4f974c83d953ca964144a7d048d24bb3247
    ```
    <!-- /sha256 -->
 3. Open the DMG and drag **iSnow** onto **Applications**.
@@ -78,6 +78,19 @@ force that path).
 | ![A moved window drops its drift](media/slide.png) | ![Hard frost with long icicles and frosted windows](media/frost.png) |
 | **Move a window** – the drift breaks off and crumbles into clumps | **Hard frost (−20 °C)** – long icicles and frosted windows |
 
+### New in 1.3
+
+| | |
+|---|---|
+| ![Christmas Eve: the tree, a gingerbread house, candy canes and Santa's sleigh](media/christmas-eve.png) | ![A reindeer rearing up for a snowman's carrot nose](media/reindeer.png) |
+| **Christmas Eve** – a gingerbread house, candy canes, a wreath on the window and Santa's new sleigh | **Reindeer** – it nibbles the snow, hops over the Dock and can't resist a carrot |
+| ![A penguin and its chick on the snow](media/penguin.png) | ![A snowman rolled by hand next to the Dock](media/build.png) |
+| **Penguin** – waddles in, belly-slides down the drifts, sometimes with its chick | **Roll your own snowman** – ⌥⇧ and sweep along the snow |
+| ![Snowmen throwing snowballs at each other](media/fight.png) | ![Fireworks at midnight on New Year's Eve](media/newyear.png) |
+| **Snowball fight** – ⌥-click a snowman and it answers | **New Year's Eve** – a countdown and fireworks at midnight |
+| ![The tree in Advent with candles lit for each day](media/advent-tree.png) | ![The welcome window with Things to Try](media/welcome.png) |
+| **Advent** – a new candle on the tree every day | **Welcome** – Accessibility help and a checklist of things to try |
+
 ## Features
 
 - **Snowfall** with parallax depth, gusty wind and four presets: Flurry, Normal, Blizzard and
@@ -90,6 +103,12 @@ force that path).
   powder, carried a little in the direction you dragged it. The clumps land on whatever is below and
   pile up again. A small nudge only shakes off the loose top layer. Close a window and all of its
   snow falls. Switching Spaces keeps the snow on your windows.
+- **Auto-hiding Dock** (with Accessibility): as the Dock slides up it pushes the snow lying at the
+  bottom up with it – what doesn't fit is thrown off to the sides – and when it slides away again its
+  snow falls down to the bottom. Snowmen, the tree and the decorations stand beside the spot where it
+  comes up. A penguin, reindeer or skier in its way gets tossed up onto the Dock (and hops off when it
+  slides away). Put a snowman on the Dock and it rides up and down with it – it tumbles off when the
+  Dock slides away and is picked up again when it comes back.
 - **Shovel:** hold **⌥ Option** for a moment and a shovel appears at the cursor. It pushes the snow
   it touches out of the way – on windows, on the Dock and at the bottom of the screen. A quick swipe
   of the cursor without ⌥ only brushes a little snow off the top – the shovel bites much deeper. (macOS doesn't let a background app replace the system cursor,
@@ -111,8 +130,27 @@ force that path).
   and a carrot nose, waves and throws snowballs at your windows and icons. Their eyes follow your
   cursor. After a few minutes a snowman falls apart and melts, and later a new one appears. Click a
   snowman to knock it apart – every third hit knocks off a level, and sometimes it fights back.
+- **Roll your own snowman:** hold **⌥ Option + ⇧ Shift** and sweep the cursor along the snow at
+  the bottom of the screen or on the Dock. A ball grows as it rolls and leaves a trough behind it;
+  let go and it stays. Roll a smaller ball into a bigger one and it's lifted on top – three balls
+  come alive as a snowman of your own.
+- **Fight back:** ⌥-click a snowman to throw a snowball at it. It wobbles, ducks, loses its hat –
+  and usually answers with one of its own. With two or more snowmen they sometimes fight each other.
+- **Outfits:** every snowman dresses differently – top hats, beanies, buckets and colourful
+  scarves (can be turned off for the classic look).
 - **Drag a snowman** anywhere – onto a window, next to the Dock, wherever you like. It drops onto
   whatever is below, and if that window moves, it falls again.
+- **Penguin visitor:** every few minutes a penguin waddles along the bottom, belly-slides down the
+  snow hills and off the Dock, hops over it, waves to the snowmen and hurries away from your cursor –
+  sometimes with its chick.
+- **Reindeer visitor** (in Christmas mode): now and then a reindeer trots along the bottom, nibbles
+  the snow, paws at the drifts and jumps over the Dock. It can't resist a carrot – it rears up and
+  bites the nose off a snowman, who finds a new one later. Some visits it's Rudolph with a glowing red
+  nose, more often at night and on Christmas Eve. Only one visitor comes at a time.
+- **Living weather** (on by default): flurries, heavy snow, gusty blizzards, clear spells, cold
+  snaps and the odd short thaw come and go over minutes. Gusts push the snow sideways and blow
+  powder off the drift crests. Your sliders set the average and never move; the menu shows the
+  weather right now, e.g. *Now: Heavy snow · −7 °C · wind from the west*.
 - **Temperature** from −25 °C to +10 °C (or °F). Below zero nothing melts: icicles grow faster,
   longer (up to about 3× in hard frost) and thicker, and windows frost over from the corners – the
   colder, the more. Above zero the snow gets wet and melts quickly, icicles melt and snowmen shrink;
@@ -127,12 +165,39 @@ force that path).
 
   ![Faded snow and icicles over a full-screen video](media/fullscreen.png)
 
-- **Christmas mode:** a decorated tree with twinkling lights, a glowing star and presents next to
-  the Dock, a string of lights under the menu bar (colorful, warm white or chasing, with adjustable
-  bulb size and brightness), Santa hats for the snowmen, and Santa's sleigh flying across the screen
-  now and then (or right away with *Send Santa Now*).
+- **Christmas mode** – automatic from 1 December to 6 January (or on/off): a layered fir tree next
+  to the Dock with snow on its branches that grows as the snow piles up, ornaments matching your
+  lights, a glowing star and wrapped presents. Glass C9 bulbs on a twisted, sagging wire hang under
+  the menu bar and along the top of the window you're working in – colorful, warm white, chasing,
+  pastel on a white wire, or icicle lights with light running down the strands – with adjustable bulb
+  size and glow. A gingerbread house with lit windows and a smoking chimney, candy canes and little
+  snowy firs stick out of the snow, a wreath hangs on the front window, snowmen hold presents and
+  candy canes, and a few golden star flakes twinkle in the snowfall. Snowmen wear Santa hats, and
+  Santa's sleigh – two pairs of reindeer with Rudolph in front – flies across the screen now and then
+  (or right away with *Send Santa Now*). In Advent a new candle lights up on
+  the tree every day, the star shines on Christmas Eve, and on 24–26 December Santa drops presents
+  by the tree. A wooden sign in the snow counts the days to Christmas Eve.
+- **New Year's Eve:** the sign counts the hours to midnight, rockets go up in the evening and at
+  midnight there's a two-minute fireworks show with confetti and flashing lights. The snowmen wear
+  party hats and hold sparklers. *Launch Fireworks Now* puts on the show any day.
 - **Extras:** the cursor scatters flakes, sparkling flakes, a custom snow color, frosted screen
   edges, and an option to keep the snow out of screenshots and screen sharing.
+
+### Welcome and Things to Try
+
+On first launch a welcome window helps with the Accessibility permission and lists things to try –
+the shovel, dragging and clicking snowmen, moving a snowy window, the temperature, Christmas mode.
+They tick themselves off as you do them. After an update, iSnow shows what's new once; a normal
+launch never steals focus. *Things to Try…* in the menu brings the list back.
+
+### Updates
+
+iSnow checks GitHub once a day for a new version and shows *iSnow X Is Available…* at the top of
+the menu (you can also check in Settings › About). **Install and Relaunch** downloads the new DMG,
+checks its Ed25519 signature, copies the app out without running anything from the image, checks its
+bundle id, version and code signature, then replaces itself and relaunches. If anything fails,
+nothing is installed and you get the download page instead. After an update macOS may ask you to
+allow Accessibility again – iSnow tells you when.
 
 ### Hide Effects and battery saver
 
@@ -148,19 +213,19 @@ notch, open iSnow again from Finder or Spotlight and the Settings window comes u
 
 | Tab | What you can change |
 |---|---|
-| Snowfall | Preset, density, maximum number of flakes, temperature, flake size, fall speed, wind, sparkle, calm snow over the active window, snow color |
+| Snowfall | Preset, density, maximum number of flakes, temperature, flake size, fall speed, wind, sparkle, calm snow over the active window, snow color, living weather and how strongly it changes |
 | Drifts | Where snow settles (windows, Dock, desktop icons, widgets, menu bar), unlimited hills or a maximum drift height on windows and at the bottom, pile-up speed, *Shake Off All Snow*, window frost, icicles and their length |
-| Snowman | On/off, number of snowmen, size, break between snowmen, fading when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often they throw, skiers – how often and how many at once, *Send Skiers Now* |
-| Christmas | Christmas mode, the tree and its size, lights under the menu bar, Santa hats, light style, size and brightness, lights while the snow is paused, Santa's sleigh, *Send Santa Now* |
+| Snowman | On/off, number of snowmen, size, break between snowmen, fading when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often they throw, outfits, skiers – how often and how many at once, *Send Skiers Now*, the penguin and how often it visits, *Send a Penguin Now* |
+| Holidays | Christmas mode (off, on, automatic), the tree and its size, lights under the menu bar, Santa hats, light style, size and brightness, lights while the snow is paused, Santa's sleigh, *Send Santa Now*, lights on the front window, the countdown sign, New Year's Eve and *Launch Fireworks Now* |
 | Other | Cursor interaction, the snowplow and the snow height it comes at, *Send the Snowplow Now*, frosted screen edges, snow over full-screen apps (opacity), 30 / 60 / 120 fps, sharp Retina rendering, battery saver, launch at login, Fahrenheit, hiding from screenshots and screen sharing, *Restore Defaults* |
-| About | Version, links to the iSnow website, source code and releases, and to the author |
+| About | Version, *Check for Updates*, automatic update checks, links to the iSnow website, source code and releases, and to the author |
 
 | | | |
 |---|---|---|
 | ![Settings – Snowfall](media/settings-snowfall.png) | ![Settings – Drifts](media/settings-drifts.png) | ![Settings – Snowman](media/settings-snowman.png) |
 | **Snowfall** | **Drifts** | **Snowman** |
-| ![Settings – Christmas](media/settings-christmas.png) | ![Settings – Other](media/settings-other.png) | ![Settings – About](media/settings-about.png) |
-| **Christmas** | **Other** | **About** |
+| ![Settings – Holidays](media/settings-christmas.png) | ![Settings – Other](media/settings-other.png) | ![Settings – About](media/settings-about.png) |
+| **Holidays** | **Other** | **About** |
 
 The app is in English and Czech and follows your system language.
 
@@ -175,7 +240,10 @@ The app is in English and Czech and follows your system language.
   usually close, but it can be off by an icon or two.
 - The snow shows up in screenshots and screen sharing unless you turn on *Hide the snow from
   screenshots and screen sharing* (Settings → Other).
-- No network access, no analytics, nothing leaves your Mac. Settings are stored in `UserDefaults`.
+- **Network:** once a day iSnow sends one anonymous request to `api.github.com` to look for a new
+  version (user agent "iSnow", no data about you or your Mac). Turn it off in Settings › About ›
+  *Check for updates automatically*. Downloads happen only when you click *Install and Relaunch*.
+  Nothing else goes over the network, there are no analytics, and settings stay in `UserDefaults`.
 
 ### Allowing Accessibility
 
@@ -219,7 +287,7 @@ Christmas mode, 60 fps): about 10 % of one CPU core and about 40 MB of memory (v
 88 MB). With the optional power-saving mode (Settings › Other), which draws calm snowfall at 30 fps
 and switches to the full rate only while something fast moves, it drops to about 4–5 %. The
 simulation itself takes well under a tenth of a millisecond per frame; most of the cost is the
-system compositing a full-screen layer. The app bundle is about 1 MB.
+system compositing a full-screen layer. The app bundle is about 4 MB.
 <!-- /perf -->
 
 ### Known limitations
@@ -276,9 +344,38 @@ checking the rendering without screen recording permission. Environment variable
 | `ISNOW_GLOW=1.5` | How brightly the Christmas lights glow |
 | `ISNOW_SANTA=1` | Sends Santa's sleigh just before the picture is taken |
 | `ISNOW_SKIER=1.5` | Sends a group of skiers 1.5 s before the picture |
+| `ISNOW_PENGUIN=20` | Sends a penguin along the bottom 20 s before the picture |
+| `ISNOW_BUILD=1` | A snowman rolled by hand and a half-rolled ball |
+| `ISNOW_FIGHT=1` / `ISNOW_PARTY=1` | A snowball fight moment / party hats and sparklers |
+| `ISNOW_WEATHER=blizzard` | Forces a weather phase (`flurry`, `steady`, `heavy`, `blizzard`, `clear`, `coldsnap`, `thaw`; `live` runs it, `log` prints two hours) |
+| `ISNOW_WEATHER_SPEED=40` / `ISNOW_GUST=1` | Fast-forwards the weather clock / adds a full gust before the picture |
+| `ISNOW_DATE=2026-12-31T23:58:00` | Pretends it is that local time (holidays, countdown, New Year's Eve) |
+| `ISNOW_FIREWORKS=1` | Starts a fireworks show 7 s before the picture |
 | `ISNOW_NOTCHFULL=1` | After a minute, a full-screen app below the notch with the menu bar hidden |
 
 ## Changelog
+
+### 1.3 – 12 November 2026
+
+- **Updates inside the app** – a daily check and one-click *Install and Relaunch*, verified with an
+  Ed25519 signature
+- **Welcome window** with a *Things to Try* checklist that ticks itself off
+- **Roll your own snowman** (⌥⇧ + sweep), **throw snowballs back** (⌥-click), and **outfits** for
+  every snowman
+- **Penguin visitor** with its chick now and then
+- **Living weather** – intensity, wind and temperature change on their own
+- **Christmas mode turns itself on** (1 Dec – 6 Jan), Advent candles, lights on the front window,
+  Santa's presents and a countdown sign
+- **New Christmas tree** – layered fir with snow on the branches that grows with the drifts and
+  ornaments that match the lights
+- **New Christmas lights** – glass C9 bulbs on a twisted wire, plus *Pastel* and *Icicle lights*
+- **Christmas decorations** – gingerbread house, candy canes, snowy firs, a window wreath, presents in
+  the snowmen's hands and golden star flakes
+- **Reindeer visitor** (sometimes Rudolph) and a **redrawn Santa's sleigh** with a reindeer team
+- **Auto-hiding Dock** – snow rides up with the Dock as it slides in and falls off when it slides away
+- Back from a full-screen app the snowfall carries on where it was instead of starting again at the top
+- **New Year's Eve** – countdown, evening rockets, a fireworks show at midnight, party hats and
+  sparklers
 
 ### 1.2 – 12 November 2026
 

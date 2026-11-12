@@ -13,7 +13,7 @@ struct TrackedWindow: Sendable, Equatable {
 final class Tracker {
     private(set) var windows: [TrackedWindow] = []      // front to back, layer-0 windows of regular apps
     private(set) var overlayOccluders: [CGRect] = []     // menus, popovers, notifications…
-    private(set) var dockFrame: CGRect?                  // nil when unknown (also when the Dock auto-hides)
+    private(set) var dockFrame: CGRect?                  // nil when unknown, or while an auto-hiding Dock is hidden
     private(set) var dockEstimated = false        // frame guessed from the Dock's preferences (no AX)
     private(set) var dockAvoid: CGRect?           // area kept free of other snow (wider when guessed)
     private(set) var icons: [CGRect] = []
@@ -28,6 +28,8 @@ final class Tracker {
     /// Whether the Dock's own window is in the on-screen list. It is missing in a full-screen Space
     /// (see BUGS H1), so this is a hint for full-screen detection. Only meaningful if the Dock does not auto-hide.
     private(set) var dockWindowOnScreen = false
+    /// The Dock auto-hides: with Accessibility `dockFrame` follows it live as it slides in and out.
+    var dockAutoHides: Bool { Self.estimate?.autohide == true }
 
     private var axBusy = false
     private var dockFromAX = false                // dockFrame came from Accessibility, not the estimate
@@ -289,20 +291,18 @@ final class Tracker {
     // MARK: Dock and desktop icons
 
     /// Dock and desktop icons via Accessibility – on a serial background queue, about once per second.
-    /// `wantDock: false` leaves the Dock values as they are (except when the Dock auto-hides).
+    /// `wantDock: false` leaves the Dock values as they are.
     /// `done` runs on the main thread after the probe, and only if the Dock frame, its avoid area, the
     /// estimated flag or the icons actually changed.
     func refreshAX(wantDock: Bool, wantIcons: Bool, done: @escaping @MainActor () -> Void) {
         let trusted = checkTrust()
         refreshEstimateIfNeeded()
-        let autohide = Self.estimate?.autohide ?? false
-        if autohide { applyEstimate() }               // clears the Dock
         guard trusted else {
-            applyEstimate()
+            applyEstimate()                           // no Dock at all while it auto-hides
             setIcons([])
             return
         }
-        let probeDock = wantDock && !autohide
+        let probeDock = wantDock
         guard probeDock || wantIcons, !axBusy else { return }
         axBusy = true
         let h = primaryH
@@ -336,7 +336,20 @@ final class Tracker {
     }
 
     private func applyAXDock(_ r: AXProbe.Result<CGRect>) {
-        if Self.estimate?.autohide == true { applyEstimate(); return }
+        if Self.estimate?.autohide == true {
+            // An auto-hiding Dock: its frame follows it as it slides; below the screen edge it is hidden.
+            switch r {
+            case .found(let f):
+                let shown = f.maxY > 1 ? f : nil
+                setDock(shown, avoid: shown, estimated: false)
+                dockFromAX = true
+            case .missing:
+                applyEstimate()
+            case .timedOut:
+                break
+            }
+            return
+        }
         switch r {
         case .found(let f):
             setDock(f, avoid: f, estimated: false)
@@ -406,7 +419,7 @@ final class Tracker {
                 MainActor.assumeIsolated {
                     Self.store(e)
                     self.estimating = false
-                    if !self.dockFromAX || e.autohide { self.applyEstimate() }
+                    if !self.dockFromAX { self.applyEstimate() }
                 }
             }
         }

@@ -197,3 +197,151 @@
 "Author" = "Autor";
 "Made by" = "Vytvořil";
 "Free and open source under the MIT License." = "Zdarma a s otevřeným kódem pod licencí MIT.";
+
+/* [1.3 updates] */
+"iSnow %@ Is Available…" = "K dispozici je iSnow %@…";
+"iSnow %@ Is Available" = "K dispozici je iSnow %@";
+"You have version %@." = "Máte verzi %@.";
+"After updating, macOS may ask you to allow Accessibility again – iSnow tells you when it does." = "Po aktualizaci může macOS znovu chtít povolit Zpřístupnění – iSnow vám dá vědět.";
+"No release notes." = "Bez poznámek k vydání.";
+"Downloading…" = "Stahuji…";
+"Verifying…" = "Ověřuji…";
+"Installing…" = "Instaluji…";
+"Skip This Version" = "Tuto verzi přeskočit";
+"Later" = "Později";
+"Download Page" = "Stránka ke stažení";
+"Install and Relaunch" = "Nainstalovat a restartovat";
+"Software Update" = "Aktualizace softwaru";
+"Show Update…" = "Zobrazit aktualizaci…";
+"Check for Updates" = "Vyhledat aktualizace";
+"Check for updates automatically" = "Automaticky vyhledávat aktualizace";
+"Once a day iSnow asks GitHub for the latest version. Nothing else is sent." = "Jednou denně se iSnow zeptá GitHubu na nejnovější verzi. Nic dalšího se neodesílá.";
+"Checking…" = "Hledám…";
+"Version %@ is available" = "K dispozici je verze %@";
+"Couldn't check for updates: %@" = "Aktualizace se nepodařilo vyhledat: %@";
+"iSnow is up to date" = "iSnow je aktuální";
+"Last checked %@" = "Naposledy zkontrolováno %@";
+"Not checked yet" = "Zatím nezkontrolováno";
+"No release found." = "Žádné vydání nenalezeno.";
+"The server answered %lld." = "Server odpověděl kódem %lld.";
+"The download page has been opened." = "Otevřela se stránka ke stažení.";
+"This release has no signed installer. Get it from the download page." = "Toto vydání nemá podepsaný instalátor. Stáhněte ho ze stránky ke stažení.";
+"iSnow is not running from an app bundle." = "iSnow neběží jako aplikace (.app).";
+"iSnow is running from the disk image or a temporary location – move it to the Applications folder first." = "iSnow běží z obrazu disku nebo z dočasného umístění – nejdřív ho přesuňte do složky Aplikace.";
+"This copy was built from source – update it with build.sh." = "Tahle kopie je sestavená ze zdrojáků – aktualizujte ji přes build.sh.";
+"iSnow cannot replace itself in this folder (no permission)." = "iSnow se v této složce nemůže nahradit (chybí oprávnění).";
+"Unexpected download address." = "Neočekávaná adresa ke stažení.";
+"The download failed." = "Stahování se nezdařilo.";
+"The download's signature does not match – nothing was installed. Get the update from the download page." = "Podpis staženého souboru nesouhlasí – nic se nenainstalovalo. Stáhněte aktualizaci ze stránky ke stažení.";
+"The disk image could not be opened." = "Obraz disku nejde otevřít.";
+"The disk image does not contain iSnow." = "Obraz disku neobsahuje iSnow.";
+"Copying the new version failed." = "Novou verzi se nepodařilo zkopírovat.";
+"The downloaded app is not iSnow." = "Stažená aplikace není iSnow.";
+"The downloaded app has an unexpected version." = "Stažená aplikace má nečekanou verzi.";
+"The downloaded app's code signature is broken." = "Podpis kódu stažené aplikace je poškozený.";
+"iSnow could not replace itself: %@" = "iSnow se nepodařilo nahradit: %@";
+
+/* [1.3 holidays] */
+"Holidays" = "Svátky";
+"Off" = "Vypnuto";
+"On" = "Zapnuto";
+"Automatic (1 Dec – 6 Jan)" = "Automaticky (1. 12. – 6. 1.)";
+"On now, until 6 January." = "Teď zapnuto, až do 6. ledna.";
+"Turns on by itself on 1 December." = "Zapne se samo 1. prosince.";
+"Countdown sign by the tree" = "Cedulka s odpočtem u stromečku";
+"Days to Christmas Eve in Advent, the time to midnight on New Year's Eve." = "V adventu dny do Štědrého dne, na Silvestra čas do půlnoci.";
+"Lights along the top of the front window" = "Světýlka po horním okraji okna v popředí";
+"From 24 to 26 December he drops presents by the tree." = "Od 24. do 26. prosince shodí dárky ke stromečku.";
+"New Year's Eve" = "Silvestr";
+"From noon on 31 December the sign counts down to midnight, rockets fly in the evening and snowmen wear party hats. At midnight: fireworks, confetti and flashing lights." = "Od poledne 31. prosince odpočítává cedulka čas do půlnoci, večer létají rachejtle a sněhuláci mají párty čepičky. O půlnoci ohňostroj, konfety a blikající světýlka.";
+"Launch Fireworks Now" = "Odpálit ohňostroj hned";
+
+/* [1.3 snowmen] */
+"Dress snowmen in hats and colourful scarves" = "Oblékat sněhuláky do čepic a barevných šál";
+"Build your own: hold ⌥ Option + ⇧ Shift and move the cursor along the snow at the bottom to roll a ball. Roll a smaller ball into a bigger one to stack it – three balls make a snowman." = "Postav si vlastního: podrž ⌥ Option + ⇧ Shift a jeď kurzorem po sněhu dole – uválíš kouli. Menší kouli dokuluj k větší a vyskočí na ni – ze tří koulí je sněhulák.";
+"⌥-click a snowman to throw a snowball at it. It may duck, lose its hat or throw one back." = "Klikni se stisknutým ⌥ na sněhuláka a hodíš po něm koulí. Může se přikrčit, přijít o čepici nebo ti ji vrátit.";
+
+/* [1.3 penguin] */
+"Visitors" = "Návštěvníci";
+"A penguin waddles along the bottom now and then" = "Občas se dole přikolébá tučňák";
+"Visits roughly every" = "Zavítá zhruba každých";
+"Send a Penguin Now" = "Poslat tučňáka hned";
+"It belly-slides down the snow, hops over the Dock and waves to the snowman. It only comes at %@ or colder." = "Klouže po břiše ze sněhu, přeskáče Dock a zamává sněhulákovi. Přijde jen při %@ a nižší teplotě.";
+
+/* [1.3 weather] */
+"Living Weather" = "Živé počasí";
+"Living weather" = "Živé počasí";
+"Weather changes" = "Síla změn";
+"Flurries, heavy snow, gusty wind, clear spells and cold snaps come and go over minutes. The sliders above set the average." = "Poprašek, husté sněžení, nárazový vítr, vyjasnění i mrazy se během minut střídají. Posuvníky výše určují průměr.";
+"Now: %@ · %@ · %@" = "Teď: %1$@ · %2$@ · %3$@";
+"Light flurry" = "Poprašek";
+"Steady snow" = "Vytrvalé sněžení";
+"Heavy snow" = "Husté sněžení";
+"Clear spell" = "Vyjasnění";
+"Cold snap" = "Tuhý mráz";
+"Thaw" = "Obleva";
+"wind from the west" = "vítr od západu";
+"wind from the east" = "vítr od východu";
+"gusts from the west" = "nárazy větru od západu";
+"gusts from the east" = "nárazy větru od východu";
+
+/* [1.3 welcome] */
+"Things to Try…" = "Co vyzkoušet…";
+"Welcome to iSnow" = "Vítej v iSnow";
+"It's snowing on your Mac. Here's how to play with it." = "Na tvém Macu sněží. Tady je, jak si s tím hrát.";
+"New in 1.3" = "Nové ve verzi 1.3";
+"What's New in iSnow" = "Co je nového v iSnow";
+"A few new friends in the snow – and the tricks you may have missed." = "Pár nových kamarádů ve sněhu – a triky, které ti možná unikly.";
+"Snow on the Dock and Icons" = "Sníh na Docku a ikonách";
+"Accessibility allowed – snow settles on the Dock and desktop icons." = "Zpřístupnění povoleno – sníh padá i na Dock a ikony plochy.";
+"macOS stopped recognizing iSnow after the update." = "macOS po aktualizaci přestal iSnow rozpoznávat.";
+"In Privacy & Security › Accessibility, remove iSnow with −, add it again with + and switch it on." = "V Soukromí a zabezpečení › Zpřístupnění odeber iSnow tlačítkem −, znovu ho přidej tlačítkem + a zapni.";
+"Allow Accessibility so snow can settle on the Dock, desktop icons and the exact edges of windows." = "Povol Zpřístupnění, ať sníh padá i na Dock, ikony plochy a přesně na okraje oken.";
+"iSnow only reads where things are – never what's in them." = "iSnow zjišťuje jen, kde co je – nikdy ne, co v tom je.";
+"Allow Accessibility…" = "Povolit Zpřístupnění…";
+"Things to Try" = "Co vyzkoušet";
+"%lld of %lld" = "%lld z %lld";
+"Turn On" = "Zapnout";
+"New Friends in the Snow" = "Noví kamarádi ve sněhu";
+"Let It Snow" = "Ať sněží";
+"Hold ⌥ Option and sweep snow away" = "Podrž ⌥ Option a odhrň sníh";
+"A shovel appears at the cursor – it clears the Dock too." = "U kurzoru se objeví lopata – poradí si i s Dockem.";
+"Drag a snowman" = "Přetáhni sněhuláka";
+"Put it on a window. If the window moves, it falls." = "Postav ho na okno. Když oknem pohneš, spadne.";
+"Click a snowman" = "Klikni na sněhuláka";
+"Every third hit knocks off a level." = "Každý třetí zásah srazí jedno patro.";
+"Drag a window with snow on it" = "Pohni oknem, na kterém leží sníh";
+"The whole drift slides off and falls apart." = "Celá závěj sklouzne a rozpadne se.";
+"Try the temperature slider" = "Zkus posuvník teploty";
+"Thaw, sleet or a hard frost with icicles." = "Obleva, plískanice, nebo mráz s rampouchy.";
+"Turn on Christmas mode" = "Zapni vánoční režim";
+"Lights, a tree, Santa hats – and Santa himself." = "Světýlka, stromeček, čepice – a k tomu Santa.";
+"Roll your own snowman" = "Postav si vlastního sněhuláka";
+"Hold ⌥ Option and ⇧ Shift and roll along the snow – stack three balls." = "Podrž ⌥ Option a ⇧ Shift a kutálej kouli sněhem – postav na sebe tři.";
+"Throw snowballs back at the snowmen" = "Oplať sněhulákům koulovačku";
+"Hold ⌥ Option and click a snowman to throw one." = "Podrž ⌥ Option a klikni na sněhuláka – hodíš po něm kouli.";
+"Watch for the penguin" = "Vyhlížej tučňáka";
+"A reindeer comes by at Christmas" = "O Vánocích přiběhne sob";
+"Keep an eye on your snowmen's carrots – sometimes it's Rudolph." = "Hlídej sněhulákům mrkve – někdy je to Rudolf.";
+"A whole new Christmas" = "Úplně nové Vánoce";
+"A snowy fir, glass bulbs, a gingerbread house – on its own from 1 December." = "Zasněžený smrček, skleněné žárovky, perníková chaloupka – samo od 1. prosince.";
+"Now and then one waddles in along the snow." = "Občas se po sněhu přibatolí.";
+"Snowfall, wind and temperature change on their own." = "Sněžení, vítr i teplota se mění samy.";
+
+/* [1.3 tree] */
+
+/* [1.3 lights] */
+"Pastel" = "Pastelová";
+"Icicle lights" = "Světelné rampouchy";
+
+/* [1.3 decor] */
+"Christmas decorations" = "Vánoční výzdoba";
+"A gingerbread house, candy canes, a wreath on the front window, little gifts for snowmen." = "Perníková chaloupka, cukrové hůlky, věnec na okně a dárečky pro sněhuláky.";
+"Golden star flakes" = "Zlaté hvězdičky mezi vločkami";
+"Decoration size" = "Velikost výzdoby";
+
+/* [1.3 reindeer] */
+"Reindeer" = "Sob";
+"A reindeer trots along the bottom now and then" = "Občas dole po sněhu přiklusá sob";
+"Send a Reindeer Now" = "Poslat soba hned";
+"It nibbles the snow, paws at the drifts, hops over the Dock – and has a soft spot for snowmen's carrot noses." = "Ochutnává sníh, hrabe v závějích, skáče přes Dock – a nedokáže odolat mrkvovým nosům sněhuláků.";

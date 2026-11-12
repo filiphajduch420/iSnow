@@ -197,6 +197,10 @@ final class Overlay: NSObject {
         window.close()
     }
 
+    /// Called when the cursor reaches the bottom edge of a screen (set by the app delegate).
+    static var bottomEdgeTouched: (@MainActor () -> Void)?
+    private var atBottomEdge = false
+
     @objc private func tick(_ link: CADisplayLink) {
         let now = link.timestamp
         let dt = last == 0 ? 1.0 / 60 : min(1.0 / 20, now - last)
@@ -204,9 +208,15 @@ final class Overlay: NSObject {
         let m = NSEvent.mouseLocation
         let local = CGPoint(x: m.x - sim.origin.x, y: m.y - sim.origin.y)
         let inside = local.x >= 0 && local.y >= 0 && local.x <= sim.size.width && local.y <= sim.size.height
+        // The cursor touching the bottom edge may bring up an auto-hiding Dock: tell the app at once.
+        let atEdge = inside && local.y <= 1.5
+        if atEdge && !atBottomEdge { Self.bottomEdgeTouched?() }
+        atBottomEdge = atEdge
         let mods = NSEvent.modifierFlags
         let shovel = mods.contains(.option)
+        sim.rollKeys = shovel && mods.contains(.shift)      // [1.3 snowmen] ⌥⇧ rolls a snowball, ⌥ alone shovels
         sim.step(dt: dt, now: CACurrentMediaTime(), mouse: inside ? local : nil, shovel: shovel)
+        if sim.shoveled { sim.shoveled = false; Tips.shared.mark(.shovel) }      // [1.3 welcome]
         updateRate(now: now)
         particles.removeAll(keepingCapacity: true)
         mesh.removeAll(keepingCapacity: true)

@@ -60,6 +60,7 @@ enum PollSchedule {
     static let calm = 0.4               // 2.5× per second while the desktop is static
     static let pressed = 0.1            // a mouse button is down: a window drag may start any moment
     static let fast = 1.0 / 30          // a window is being dragged or the cursor is at a snowman
+    static let dockWatch = 1.0 / 20     // an auto-hiding Dock is shown or may be sliding in or out
     /// How long `busy` is kept after the last change before backing off to `calm`.
     static let calmAfter = 3.0
     /// How long `fast` is kept after a window last moved.
