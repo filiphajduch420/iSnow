@@ -24,6 +24,7 @@ struct SettingsView: View {
             SnowmanTab(settings: settings, delegate: delegate).tabItem { Label("Snowman", systemImage: "figure.wave") }.tag(2)
             ChristmasTab(settings: settings, delegate: delegate).tabItem { Label("Christmas", systemImage: "gift") }.tag(3)
             ExtrasTab(settings: settings, delegate: delegate).tabItem { Label("Other", systemImage: "sparkles") }.tag(4)
+            AboutTab().tabItem { Label("About", systemImage: "info.circle") }.tag(5)
         }
         .frame(width: 500)
         .onAppear {
@@ -304,6 +305,55 @@ private struct ChristmasTab: View {
                 }
             }
             .disabled(!settings.config.christmas)
+        }
+        .formStyle(.grouped)
+    }
+}
+
+struct AboutTab: View {
+    /// Version shown when there is no app bundle (screenshots rendered from `swift build`).
+    @MainActor static var fallbackVersion = "–"
+    private static let website = URL(string: "https://filiphajduch.dev/apps/isnow/")!
+    private static let repo = URL(string: "https://github.com/filiphajduch420/iSnow")!
+    private static let releases = URL(string: "https://github.com/filiphajduch420/iSnow/releases")!
+    private static let authorSite = URL(string: "https://filiphajduch.dev/en/")!
+    private static let authorGitHub = URL(string: "https://github.com/filiphajduch420")!
+
+    private var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? Self.fallbackVersion
+        let build = info?["CFBundleVersion"] as? String
+        return build == nil || build == short ? short : "\(short) (\(build!))"
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable().frame(width: 64, height: 64)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: "iSnow").font(.title2.weight(.semibold))
+                        Text("Version \(version)").foregroundStyle(.secondary).textSelection(.enabled)
+                        Text("It snows on your Mac.").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            Section("App") {
+                LabeledContent("Website") { Link("filiphajduch.dev/apps/isnow", destination: Self.website) }
+                LabeledContent("Source code") { Link("github.com/filiphajduch420/iSnow", destination: Self.repo) }
+                LabeledContent("Updates") { Link("Releases on GitHub", destination: Self.releases) }
+            }
+            Section("Author") {
+                LabeledContent("Made by") { Text(verbatim: "Filip Hajduch") }
+                LabeledContent("Website") { Link("filiphajduch.dev", destination: Self.authorSite) }
+                LabeledContent("GitHub") { Link("@filiphajduch420", destination: Self.authorGitHub) }
+            }
+            Section {
+                Text("Free and open source under the MIT License.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

@@ -184,3 +184,16 @@
 "It drives across the whole screen – over the Dock too – whenever the snow at the bottom gets deep." = "Projede celou obrazovku – i přes Dock – vždy, když je dole hodně sněhu.";
 "Skiers" = "Lyžaři";
 "Draw calm snowfall at 30 fps (saves power)" = "Klidné sněžení kreslit v 30 fps (šetří energii)";
+
+/* About */
+"About" = "O aplikaci";
+"Version %@" = "Verze %@";
+"It snows on your Mac." = "Na Macu sněží.";
+"App" = "Aplikace";
+"Website" = "Web";
+"Source code" = "Zdrojový kód";
+"Updates" = "Aktualizace";
+"Releases on GitHub" = "Vydání na GitHubu";
+"Author" = "Autor";
+"Made by" = "Vytvořil";
+"Free and open source under the MIT License." = "Zdarma a s otevřeným kódem pod licencí MIT.";

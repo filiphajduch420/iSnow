@@ -52,7 +52,7 @@ final class Overlay: NSObject {
     /// Draw calm snowfall at the lower ambient rate (an option – off by default, the snow then always
     /// falls at `fps`).
     var calmAtLowerRate = false
-    /// Rate for plain snowfall, faded full-screen snow and twinkling lights. Divides 60 and 120 Hz evenly.
+    /// Rate for calm snowfall and twinkling lights when `calmAtLowerRate` is on. Divides 60 and 120 Hz evenly.
     static let ambientFPS = 30
     /// How long the simulation must report "nothing fast" before the rate drops (a splash must not flip it twice).
     private static let lowerAfter: CFTimeInterval = 0.75
@@ -114,8 +114,9 @@ final class Overlay: NSObject {
     /// Full rate while something fast is on screen; the ambient rate once it has been calm for a moment.
     /// Raises at once, lowers only after `lowerAfter`.
     private func updateRate(now: CFTimeInterval) {
-        // Over a full-screen app only faded snow is drawn – never worth more than the ambient rate.
-        let fast = (sim.wantsFullFrameRate || !calmAtLowerRate) && !sim.isFullscreenPaused
+        // Faded snow over a full-screen app follows the same rule as the desktop: full rate unless the
+        // user chose to draw calm snowfall at the lower rate.
+        let fast = sim.wantsFullFrameRate || !calmAtLowerRate
         if fast {
             calmSince = 0
         } else if calmSince == 0 {

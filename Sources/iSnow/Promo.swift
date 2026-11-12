@@ -604,8 +604,13 @@ enum Promo {
         var cfg = SimConfig()
         cfg.christmas = true
         let preview = Settings(preview: cfg)
+        // Run from `swift build` there is no app bundle: take the icon and version from the sources.
+        if let icon = NSImage(contentsOfFile: "build/AppIcon.icns") { NSApp.applicationIconImage = icon }
+        if let info = NSDictionary(contentsOfFile: "Info.plist"), let v = info["CFBundleShortVersionString"] as? String {
+            AboutTab.fallbackVersion = v
+        }
         let tabs = [(0, "settings-snowfall"), (1, "settings-drifts"), (2, "settings-snowman"), (3, "settings-christmas"),
-                    (4, "settings-other")]
+                    (4, "settings-other"), (5, "settings-about")]
         var pending = tabs.count
         for (idx, (tab, name)) in tabs.enumerated() {
             let host = NSHostingView(rootView: SettingsView(settings: preview, delegate: delegate, tab: tab, activates: false)

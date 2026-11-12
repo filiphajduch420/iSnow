@@ -10,22 +10,22 @@ goes straight through the snow.
 
 ![iSnow – snow drifts on windows, icicles and snowmen on the Dock](media/hero.png)
 
-**Current version: 1.1** · macOS 14 Sonoma or later · Apple silicon and Intel · about 1 MB · [MIT License](LICENSE)
+**Current version: 1.2** · macOS 14 Sonoma or later · Apple silicon and Intel · about 1 MB · [MIT License](LICENSE)
 
 ## Install
 
 ### Download (recommended)
 
-1. Download **`iSnow-v1.1.dmg`** (and `iSnow-v1.1.dmg.sha256`) from the
+1. Download **`iSnow-v1.2.dmg`** (and `iSnow-v1.2.dmg.sha256`) from the
    [Releases](https://github.com/filiphajduch420/iSnow/releases/latest) page.
 2. Verify the download – with both files in the same folder, run:
    ```sh
-   shasum -a 256 -c iSnow-v1.1.dmg.sha256
+   shasum -a 256 -c iSnow-v1.2.dmg.sha256
    ```
-   It should print `iSnow-v1.1.dmg: OK`. The SHA-256 of `iSnow-v1.1.dmg` is:
+   It should print `iSnow-v1.2.dmg: OK`. The SHA-256 of `iSnow-v1.2.dmg` is:
    <!-- sha256 -->
    ```
-   461f28d5124d3ef12fe9efa18da482b8ad8e5618cc2e1f52123063548a01f9b5
+   0ad7c0d6d77da8cfbb1d57af1599827fb60853f614582f719a26854494ff474a
    ```
    <!-- /sha256 -->
 3. Open the DMG and drag **iSnow** onto **Applications**.
@@ -153,13 +153,14 @@ notch, open iSnow again from Finder or Spotlight and the Settings window comes u
 | Snowman | On/off, number of snowmen, size, break between snowmen, fading when covering a window, *Back to the Dock*, *Build Now*, snowball fight and how often they throw, skiers – how often and how many at once, *Send Skiers Now* |
 | Christmas | Christmas mode, the tree and its size, lights under the menu bar, Santa hats, light style, size and brightness, lights while the snow is paused, Santa's sleigh, *Send Santa Now* |
 | Other | Cursor interaction, the snowplow and the snow height it comes at, *Send the Snowplow Now*, frosted screen edges, snow over full-screen apps (opacity), 30 / 60 / 120 fps, sharp Retina rendering, battery saver, launch at login, Fahrenheit, hiding from screenshots and screen sharing, *Restore Defaults* |
+| About | Version, links to the iSnow website, source code and releases, and to the author |
 
 | | | |
 |---|---|---|
 | ![Settings – Snowfall](media/settings-snowfall.png) | ![Settings – Drifts](media/settings-drifts.png) | ![Settings – Snowman](media/settings-snowman.png) |
 | **Snowfall** | **Drifts** | **Snowman** |
-| ![Settings – Christmas](media/settings-christmas.png) | ![Settings – Other](media/settings-other.png) | |
-| **Christmas** | **Other** | |
+| ![Settings – Christmas](media/settings-christmas.png) | ![Settings – Other](media/settings-other.png) | ![Settings – About](media/settings-about.png) |
+| **Christmas** | **Other** | **About** |
 
 The app is in English and Czech and follows your system language.
 
@@ -202,9 +203,9 @@ iSnow is built to stay out of the way:
   snowmen); shaders are compiled from source, so there are no textures or other assets;
 - rendered at standard (1×) resolution by default – a quarter of the pixels of a 2× Retina frame
   for the GPU and the window compositor; *Sharp Retina rendering* is optional;
-- `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode and on battery; faded snow
-  over full-screen apps is drawn at 30 fps, and an optional power-saving mode does the same for calm
-  snowfall, switching to the full rate only while something fast is on screen;
+- `CADisplayLink` capped at 60 fps (configurable), 30 fps in Low Power Mode and on battery; an
+  optional power-saving mode draws calm snowfall at 30 fps, switching to the full rate only while
+  something fast is on screen;
 - rendering stops completely when nothing is moving, while the snow is paused or hidden, over
   full-screen apps when their snow is set to none, and while the screen is asleep or locked – no
   timer runs then either;
@@ -276,6 +277,33 @@ checking the rendering without screen recording permission. Environment variable
 | `ISNOW_SANTA=1` | Sends Santa's sleigh just before the picture is taken |
 | `ISNOW_SKIER=1.5` | Sends a group of skiers 1.5 s before the picture |
 | `ISNOW_NOTCHFULL=1` | After a minute, a full-screen app below the notch with the menu bar hidden |
+
+## Changelog
+
+### 1.2 – 12 November 2026
+
+- **About** tab in Settings with the version and links to the iSnow website, the source code,
+  releases and the author
+- **Smoother snow over full-screen apps** – it now falls at your frame rate (60 or 120 fps) instead
+  of a fixed 30 fps
+- **Heavier snow by default** – 25 % denser with 25 % bigger flakes (the presets scaled to match)
+- **Lighter on resources** – about half the work per frame, no more main-thread hitches from scanning
+  running apps, slower polling while nothing changes, GPU memory freed while hidden; memory use
+  dropped from about 88 MB to 40 MB
+- Optional: draw calm snowfall at 30 fps to save power (Settings › Other, off by default)
+- Fixed a snowman's cut-short wave keeping the full frame rate
+
+### 1.1 – 11 November 2026
+
+Snowplow, skiers, Hide Effects, battery saver, faded snow over full-screen apps, snow texture,
+Santa's sleigh, snowmen's eyes following the cursor, the ⌥ Option shovel, calm snow over the active
+window, Fahrenheit, and many fixes from a full review – see the
+[release notes](https://github.com/filiphajduch420/iSnow/releases/tag/v1.1).
+
+### 1.0 – 11 November 2026
+
+First release: snowfall with wind and presets, drifts on windows, the Dock, desktop icons and
+widgets, icicles, temperature, snowmen on the Dock and Christmas mode.
 
 ## Contributing
 
