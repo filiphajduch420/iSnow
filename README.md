@@ -10,22 +10,22 @@ goes straight through the snow.
 
 ![iSnow – snow drifts on windows, icicles and snowmen on the Dock](media/hero.png)
 
-**Current version: 1.3** · macOS 14 Sonoma or later · Apple silicon and Intel · about 4 MB · [MIT License](LICENSE)
+**Current version: 1.3.1** · macOS 14 Sonoma or later · Apple silicon and Intel · about 4 MB · [MIT License](LICENSE)
 
 ## Install
 
 ### Download (recommended)
 
-1. Download **`iSnow-v1.3.dmg`** (and `iSnow-v1.3.dmg.sha256`) from the
+1. Download **`iSnow-v1.3.1.dmg`** (and `iSnow-v1.3.1.dmg.sha256`) from the
    [Releases](https://github.com/filiphajduch420/iSnow/releases/latest) page.
 2. Verify the download – with both files in the same folder, run:
    ```sh
-   shasum -a 256 -c iSnow-v1.3.dmg.sha256
+   shasum -a 256 -c iSnow-v1.3.1.dmg.sha256
    ```
-   It should print `iSnow-v1.3.dmg: OK`. The SHA-256 of `iSnow-v1.3.dmg` is:
+   It should print `iSnow-v1.3.1.dmg: OK`. The SHA-256 of `iSnow-v1.3.1.dmg` is:
    <!-- sha256 -->
    ```
-   d54308320807becee593748cb0d9a4f974c83d953ca964144a7d048d24bb3247
+   2de85ede7386da6cad52881473ff8ba357e5db54332edae123ffc16d7c5df03c
    ```
    <!-- /sha256 -->
 3. Open the DMG and drag **iSnow** onto **Applications**.
@@ -354,6 +354,13 @@ checking the rendering without screen recording permission. Environment variable
 | `ISNOW_NOTCHFULL=1` | After a minute, a full-screen app below the notch with the menu bar hidden |
 
 ## Changelog
+
+### 1.3.1 – 23 November 2026
+
+- **Apple Pay works with iSnow running** – the snow steps aside while a payment sheet is open, so the
+  Touch ID / *Confirm with iPhone* part shows up again, and comes back when it closes
+- Snow on a desktop icon falls off when you delete or move the icon instead of hanging in the air
+- Over a full-screen app the menu bar snow and icicles hang from the top of its window
 
 ### 1.3 – 12 November 2026
 

@@ -142,6 +142,15 @@ final class Tracker {
         if let pid { regularByPID[pid] = nil }
     }
 
+    private var finderSeen: CFAbsoluteTime = -100
+    /// Finder is the active app, or was a few seconds ago: desktop icons may be deleted or moved right now,
+    /// so they are worth reading on every probe (otherwise a removed icon's drift waits for the next slow read).
+    var desktopInUse: Bool {
+        let now = CFAbsoluteTimeGetCurrent()
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" { finderSeen = now }
+        return now - finderSeen < 4
+    }
+
     /// Whether `pid` belongs to a regular app (one with a Dock icon). One LaunchServices lookup per new pid.
     private func isRegular(_ pid: pid_t, recheck: Bool, rechecked: inout Set<pid_t>) -> Bool {
         if let known = regularByPID[pid], !recheck || rechecked.contains(pid) { return known }
@@ -244,6 +253,12 @@ final class Tracker {
         var bars: [CGRect] = []
         var active: CGRect?
         var dockSeen = false
+        var secureSeen = false
+        var plain: [(id: Int, pid: pid_t, width: CGFloat, height: CGFloat)] = []   // [applepay] level-0 windows
+        defer {
+            SecureUI.shared.windowShown = secureSeen
+            SecureUI.shared.noteWindows(plain, front: frontPID)
+        }
         ws.reserveCapacity(count)
         for i in 0..<count {
             guard let item = CFArrayGetValueAtIndex(list, i) else { continue }
@@ -252,6 +267,9 @@ final class Tracker {
                   let layer = Self.int(d, kCGWindowLayer),
                   let b = Self.rect(d, kCGWindowBounds) else { continue }
             if (Self.double(d, kCGWindowAlpha) ?? 1) < 0.05 { continue }
+            // [applepay] authorization UI (password / Touch ID / permission prompts) – see SecureUI
+            if !secureSeen, SecureUI.coverable(layer: layer, width: b.width, height: b.height),
+               SecureUI.shared.ownsSecureWindows(pid) { secureSeen = true }
             let r = CGRect(x: b.minX, y: h - b.maxY, width: b.width, height: b.height)
             if layer < 0 {
                 // Desktop widgets live in Notification Center's desktop-level windows. The window is
@@ -262,6 +280,7 @@ final class Tracker {
                     wid.append(TrackedWindow(id: id, frame: r.insetBy(dx: 11, dy: 11)))
                 }
             } else if layer == 0 {
+                if let id = Self.int(d, kCGWindowNumber) { plain.append((id, pid, b.width, b.height)) }   // [applepay]
                 // Only regular apps: accessory apps keep invisible helper windows (annotation, dimmers…).
                 guard b.width >= 60, b.height >= 40,
                       isRegular(pid, recheck: recheck, rechecked: &rechecked),

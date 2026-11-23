@@ -34,6 +34,11 @@ final class Overlay: NSObject {
     private var released = false
     /// The effects are hidden: window ordered out, no frames.
     private(set) var hidden = false
+    /// [applepay] Put away while system authorization UI is shown (see SecureUI): ordered out, no frames,
+    /// the simulation keeps its state.
+    var shielded = false { didSet { if shielded != oldValue { applyVisibility() } } }
+    /// The window is ordered out (hidden or shielded).
+    private var orderedOut = false
     /// Screen asleep or locked: no frames, but the window stays.
     var suspended = false {
         didSet {
@@ -41,7 +46,7 @@ final class Overlay: NSObject {
             if suspended {
                 sleep()
                 releaseGPUMemory()
-            } else if !hidden {
+            } else if !orderedOut {
                 restoreGPUMemory()
                 wake()                  // redraw the kept state (paused drifts would otherwise stay blank)
             }
@@ -171,7 +176,14 @@ final class Overlay: NSObject {
     func setHidden(_ on: Bool) {
         guard on != hidden else { return }
         hidden = on
-        if on {
+        applyVisibility()
+    }
+
+    private func applyVisibility() {
+        let out = hidden || shielded
+        guard out != orderedOut else { return }
+        orderedOut = out
+        if out {
             sleep()
             releaseGPUMemory()          // while still ordered in, so the empty frame is taken
             window.orderOut(nil)
@@ -183,7 +195,7 @@ final class Overlay: NSObject {
     }
 
     func wake() {
-        guard !hidden, !suspended, let link, link.isPaused else { return }
+        guard !orderedOut, !suspended, let link, link.isPaused else { return }
         last = 0
         link.isPaused = false
     }
@@ -226,7 +238,7 @@ final class Overlay: NSObject {
         let t = Mesh.tint
         renderer.tint = SIMD3(t.0, t.1, t.2)
         renderer.draw(layer: view.metalLayer, size: view.bounds.size, particles: particles, mesh: mesh, buffers: &buffers)
-        if !sim.isAnimating || hidden || suspended { link.isPaused = true }
+        if !sim.isAnimating || orderedOut || suspended { link.isPaused = true }
     }
 }
 

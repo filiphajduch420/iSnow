@@ -137,6 +137,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DockProbe.run()          // debug: the Dock's frame from Accessibility over a few seconds
             exit(0)
         }
+        if CommandLine.arguments.contains("--secure-ui") {
+            // Debug: authorization UI the overlays would step aside for, watched for N seconds (default 1).
+            let i = CommandLine.arguments.firstIndex(of: "--secure-ui")! + 1
+            let secs = i < CommandLine.arguments.count ? Double(CommandLine.arguments[i]) ?? 1 : 1
+            SecureUI.shared.runProbe(seconds: min(max(secs, 0.5), 600))
+            exit(0)
+        }
         if CommandLine.arguments.contains("--print-dock") {
             // Debug: show the Dock frame estimated without Accessibility.
             print("estimated Dock:", Tracker.estimatedDockFrame(includeMinimized: false).map { "\($0)" } ?? "none",
@@ -165,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.refreshWindows()
         rebuildOverlays()           // polls once – which also starts the poll timer and the first Dock probe
         Updater.shared.start()      // [1.3 updates] the daily update check (nothing until ~1 min after launch)
+        SecureUI.shared.start { [weak self] in self?.poll() }     // [applepay] an Apple Pay / auth sheet came or went
 
         let nc = NotificationCenter.default
         let ws = NSWorkspace.shared.notificationCenter
@@ -356,6 +364,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && (now < dockWatchUntil || tracker.dockFrame != nil)
         if watchDock { refreshAX(icons: false) } else { probeAXIfDue(now: now, animating: wasAnimating, allFullscreen: allFullscreen) }
         if fresh { tracker.refreshWindows() }
+        // [applepay] Apple Pay, Touch ID and password prompts hide their confirm part under any other
+        // app's window: put every iSnow window away while one is shown (nothing is lost), watch for its end.
+        if shield(SecureUI.shared.active) { setPollInterval(SecureUI.pollInterval); return }
         if tracker.revision != lastRevision {
             lastRevision = tracker.revision
             lastChange = now
@@ -414,6 +425,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setPollInterval(dockShownOrComing ? min(interval, PollSchedule.dockWatch) : interval)
     }
 
+    /// [applepay] iSnow's windows are put away for system authorization UI (see SecureUI).
+    private var shielded = false
+
+    /// Puts the overlays and snowman panels away (or back); returns `on`.
+    private func shield(_ on: Bool) -> Bool {
+        guard on != shielded else { return on }
+        shielded = on
+        for o in overlays { o.shielded = on }
+        lastPanelRects = updatePanel()
+        return on
+    }
+
     /// The Dock (and every 4th time the desktop icons) via Accessibility, off the main thread: every
     /// second, every 3 s while the Dock stays put, every 5 s while nothing animates, never while
     /// full-screen apps cover every screen (neither the Dock nor the desktop is visible then).
@@ -421,17 +444,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func probeAXIfDue(now: Double, animating: Bool, allFullscreen: Bool) {
         guard !allFullscreen, now >= nextAX else { return }
         if tracker.dockFrame == axLastDock { axStable += 1 } else { axStable = 0; axLastDock = tracker.dockFrame }
+        // While Finder is in use, icons may be deleted or moved: read them every second, so a removed
+        // icon's drift falls right away instead of hanging in the air until the next slow read.
+        let desktop = settings.config.onIcons && tracker.desktopInUse
+        let interval = PollSchedule.axInterval(stableProbes: axStable, animating: animating, trusted: settings.axTrusted)
         // A little slack so a poll that fires a bit early (timer tolerance) doesn't skip a whole round.
-        nextAX = now + PollSchedule.axInterval(stableProbes: axStable, animating: animating,
-                                               trusted: settings.axTrusted) - 0.1
-        refreshAX()
+        nextAX = now + (desktop ? min(1, interval) : interval) - 0.1
+        refreshAX(everyIcon: desktop)
     }
 
-    private func refreshAX(icons: Bool = true) {
+    private func refreshAX(icons: Bool = true, everyIcon: Bool = false) {
         axProbes += 1
         let c = settings.config
-        // Desktop icons barely move: every 4th probe (never while an auto-hiding Dock is followed closely).
-        tracker.refreshAX(wantDock: true, wantIcons: icons && c.onIcons && axProbes % 4 == 1) { [weak self] in
+        // Desktop icons barely move: every 4th probe (never while an auto-hiding Dock is followed closely),
+        // every probe while Finder is in use.
+        tracker.refreshAX(wantDock: true, wantIcons: icons && c.onIcons && (everyIcon || axProbes % 4 == 1)) { [weak self] in
             // Only called when the Dock or the icons changed.
             guard let self else { return }
             self.axStable = 0
@@ -468,6 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let o = Overlay(screen: s, renderer: renderer, hostsSnowman: false)
                 o.suspended = suspended
                 if state.hidden { o.setHidden(true) }
+                o.shielded = shielded           // [applepay]
                 next.append(o)
             }
         }
@@ -592,7 +620,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Positions the snowman panels; returns the snowmen's click targets (local coordinates).
     @discardableResult
     private func updatePanel() -> [CGRect?] {
-        let targets = state.hidden || suspended ? [] : snowmanOverlay?.sim.snowmanTargets ?? []
+        let targets = state.hidden || suspended || shielded ? [] : snowmanOverlay?.sim.snowmanTargets ?? []
         // One panel per snowman, keyed by its id, so a panel keeps its snowman while others come and go.
         for t in targets where panels[t.id] == nil {
             let id = t.id

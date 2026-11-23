@@ -119,7 +119,7 @@ final class Simulation {
     private var menuGrown: [Int] = []           // bins whose powder grew since the last build
     private var menuMeshValid = false
     private var menuBlock: [Vertex] = []        // scratch for one bin's block
-    private var menuMeshKey: (bar: CGFloat, occ: [CGRect]) = (-1, [])
+    private var menuMeshKey: (edge: Float, occ: [CGRect]) = (-1, [])
     private var garlandCache = Christmas.LightCache()
     private var treeCache = Christmas.LightCache()
     // [1.3 holidays] presents, countdown sign, fireworks (HolidayScene); lights on the frontmost window
@@ -181,6 +181,11 @@ final class Simulation {
     private var meshTimer: Double = 0
     private var cfg = SimConfig()
     private var fullscreen = false
+    /// Top edge of the full-screen window (the screen's top, or the notch line).
+    private var fullscreenTop: CGFloat = 0
+    /// Where the menu-bar powder and icicles hang: under the menu bar – or, over a full-screen app
+    /// (whose menu bar is hidden), from the top edge of its window instead of across its toolbar.
+    private var menuEdge: Float { fullscreen ? Float(fullscreenTop) : H - Float(menuBarHeight) }
     private var lastMouse: SIMD2<Float>?
     private var shovelAt: SIMD2<Float>?        // cursor position while the ⌥ shovel is active
     private var kickedUntil: Double = 0        // the cursor scattered flakes – they fly fast until then
@@ -245,17 +250,20 @@ final class Simulation {
         // Windows that reach from the bottom edge to the top (or to the notch while the menu bar is
         // hidden). One of them spanning the width is full screen; several side by side are Split View.
         var spans: [(CGFloat, CGFloat)] = []
+        var spanTop = size.height
         for w in windows {
             let r = w.frame.offsetBy(dx: -origin.x, dy: -origin.y)
             guard r.minY <= 1, r.maxY >= size.height - 1 || (!menuVisible && r.maxY >= size.height - topGap),
                   r.maxX > 0, r.minX < size.width else { continue }
             spans.append((max(0, r.minX), min(size.width, r.maxX)))
+            spanTop = min(spanTop, r.maxY)
         }
         spans.sort { $0.0 < $1.0 }
         var reach: CGFloat = 0
         for sp in spans where sp.0 <= reach + 12 { reach = max(reach, sp.1) }   // Split View has a small gap
         fullscreen = cfg.pauseFullscreen && !spans.isEmpty && reach >= size.width - 1
             && (spans.count == 1 || !menuVisible)
+        if fullscreen && fullscreenTop != spanTop { fullscreenTop = spanTop; menuMeshValid = false; changed = true }
         if fullscreen != wasFull {
             changed = true
             if fullscreen && cfg.fullscreenSnow < 0.02 {
@@ -410,12 +418,14 @@ final class Simulation {
         // An auto-hiding Dock coming up tosses whoever is in its way up onto it, or shoves snowmen aside.
         if dockTransient, hostsSnowman, let d = dockLocal, Float(d.maxY) > lastDockTop + 0.5 { pushedByDock(d) }
         lastDockTop = dockLocal.map { Float($0.maxY) } ?? -1000
-        // Desktop icons – they sit below all windows.
+        // Desktop icons – they sit below all windows. Keyed by position, so a moved icon is a new one.
+        var newIcons: [CGRect] = []
         if cfg.onIcons {
             for f in icons {
                 let r = f.offsetBy(dx: -origin.x, dy: -origin.y)
                 guard bounds.contains(r) else { continue }
                 let key = (1 << 40) + Int(r.minX / 4) * 8192 + Int(r.minY / 4)
+                if piles[key] == nil { newIcons.append(r) }
                 let p = upsert(key: key, kind: .icon, rect: r)
                 if updateVisibility(p, occluders: front) { changed = true }
                 if updateLimit(p, windows: Array(front.dropFirst(localOcc.count))) { changed = true }
@@ -443,10 +453,33 @@ final class Simulation {
         // switch, not closing: keep the snow. A single window that disappears was closed or minimized.
         let vanishedWindows = piles.filter { !seen.contains($0.key) && $0.value.parkedSince == nil && $0.value.kind == .window }.count
         let spaceSwitch = now < keepVanishedUntil || fullscreen || wasFull || vanishedWindows >= 2
+        // Desktop icons are the same on every Space, so the Space-switch rule above doesn't apply to them.
+        // An icon that disappears was deleted or moved: its drift falls. Only when every icon disappears at
+        // once is the desktop hidden (Stage Manager, Finder relaunching, a failed read) – then keep the snow.
+        let iconsSeen = order.contains { $0.kind == .icon }
+        let vanishedIcons = piles.values.filter { !seen.contains($0.key) && $0.parkedSince == nil && $0.kind == .icon }.count
+        let desktopHidden = cfg.onIcons && !iconsSeen && vanishedIcons >= 2
         for (k, p) in piles where !seen.contains(k) {
             if let since = p.parkedSince {
-                // Gone for good after 4 hours on another Space.
-                if now - since > 4 * 3600 { piles[k] = nil }
+                // Gone for good after 4 hours on another Space – or, for an icon, as soon as the desktop
+                // is back without it (deleted meanwhile); it was hidden, so it just goes.
+                if now - since > 4 * 3600 || (p.kind == .icon && iconsSeen) { piles[k] = nil }
+                continue
+            }
+            if p.kind == .icon {
+                if desktopHidden {
+                    p.parkedSince = now
+                } else {
+                    // Moved: the drift slides off the old spot the way the icon went (like a dragged window).
+                    let c = CGPoint(x: p.rect.midX, y: p.rect.midY)
+                    let to = newIcons.filter { abs($0.width - p.rect.width) < 2 }
+                        .min { hypot($0.midX - c.x, $0.midY - c.y) < hypot($1.midX - c.x, $1.midY - c.y) }
+                    // Icons are read about once a second (no live drag), so this is a gentle nudge, not a fling.
+                    let vel = to.map { SIMD2(Float($0.midX - c.x) * 2, Float($0.midY - c.y) * 2) } ?? .zero
+                    dump(p, vel: vel)
+                    piles[k] = nil
+                }
+                changed = true
                 continue
             }
             if spaceSwitch {
@@ -2446,7 +2479,7 @@ final class Simulation {
 
     /// Is something (an open menu, a popover) covering the strip right under the menu bar at x?
     private func underMenu(_ x: Float) -> Bool {
-        let y = size.height - menuBarHeight - 6
+        let y = CGFloat(menuEdge) - 6
         return localOcc.contains { CGFloat(x) >= $0.minX && CGFloat(x) <= $0.maxX && y >= $0.minY && y <= $0.maxY }
     }
 
@@ -2544,8 +2577,8 @@ final class Simulation {
     /// already shows only rewrites that bin's 12 vertices.
     private func buildMenuBar(into out: inout [Vertex], cached: Bool) {
         guard cached else { _ = buildMenuBarMesh(into: &out); return }
-        if menuMeshValid, menuMeshKey.bar == menuBarHeight, menuMeshKey.occ == localOcc {
-            let y = H - Float(menuBarHeight)
+        if menuMeshValid, menuMeshKey.edge == menuEdge, menuMeshKey.occ == localOcc {
+            let y = menuEdge
             let mat = Mesh.snowMaterial(kind: 1, anchor: (0, y))
             for b in menuGrown where menuSlot[b] < 0 {
                 // A new bin shows up (or stays hidden under a menu): rebuild in order.
@@ -2561,10 +2594,10 @@ final class Simulation {
                 }
             }
         }
-        if !menuMeshValid || menuMeshKey.bar != menuBarHeight || menuMeshKey.occ != localOcc {
+        if !menuMeshValid || menuMeshKey.edge != menuEdge || menuMeshKey.occ != localOcc {
             menuMesh.removeAll(keepingCapacity: true)
             menuSlot = buildMenuBarMesh(into: &menuMesh)
-            menuMeshKey = (menuBarHeight, localOcc)
+            menuMeshKey = (menuEdge, localOcc)
             menuMeshValid = true
         }
         menuGrown.removeAll(keepingCapacity: true)
@@ -2573,7 +2606,7 @@ final class Simulation {
 
     /// Returns, per bin, the first vertex of its block (-1 = not drawn).
     private func buildMenuBarMesh(into out: inout [Vertex]) -> [Int] {
-        let y = H - Float(menuBarHeight)
+        let y = menuEdge
         let bw = Self.binW
         let mat = Mesh.snowMaterial(kind: 1, anchor: (0, y))
         var slots = Array(repeating: -1, count: menuSnow.count)

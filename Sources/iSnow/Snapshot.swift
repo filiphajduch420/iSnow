@@ -27,7 +27,7 @@ enum Snapshot {
         case "none": nil
         default: CGRect(x: 330, y: 6, width: 540, height: 56)
         }
-        let icons = [CGRect(x: 1110, y: 620, width: 52, height: 52), CGRect(x: 1110, y: 530, width: 52, height: 52)]
+        var icons = [CGRect(x: 1110, y: 620, width: 52, height: 52), CGRect(x: 1110, y: 530, width: 52, height: 52)]
         // ISNOW_AUTOHIDE=up|mid|down: an auto-hiding Dock, hidden while it snows; then it slides up out of the
         // snow at the bottom (mid: the picture is taken halfway up), or comes up and slides away again (down).
         let autohide = env["ISNOW_AUTOHIDE"]
@@ -205,6 +205,28 @@ enum Snapshot {
                 sim.step(dt: dt, now: t)
                 t += dt
             }
+        } else if let mode = env["ISNOW_ICONS"] {
+            // ISNOW_ICONS=gone deletes the upper desktop icon, =move drags it 160 pt left, =hidden hides the
+            // whole desktop for 2 s and brings it back, =hiddengone brings it back without the upper icon.
+            // The picture is taken ISNOW_ICONS_FRAMES (default 10) frames after the change.
+            func frames(_ n: Int) {
+                for _ in 0..<n {
+                    sim.sync(windows: wins, occluders: [], dock: dock, icons: icons, widgets: widgets, now: t, cfg: cfg)
+                    sim.step(dt: dt, now: t)
+                    t += dt
+                }
+            }
+            let all = icons
+            switch mode {
+            case "gone": icons.removeFirst()
+            case "move": icons[0] = icons[0].offsetBy(dx: -160, dy: 0)
+            case "hidden", "hiddengone":
+                icons = []
+                frames(60)
+                icons = mode == "hidden" ? all : Array(all.dropFirst())
+            default: break
+            }
+            frames(max(1, Int(env["ISNOW_ICONS_FRAMES"] ?? "") ?? 10))
         } else {
             sim.throwSnowball()
             for _ in 0..<12 { sim.step(dt: dt, now: t); t += dt }
